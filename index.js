@@ -19,7 +19,7 @@ function getRepoInfo() {
   if (!match)
     throw new Error("Could not parse repository info from remote URL");
   //   const owner = match[1];
-  const owner = "farrukh12255";
+  const owner = "farrukh12255"; // force your username
   const repo = match[2];
   return { owner, repo };
 }
@@ -46,10 +46,32 @@ async function getLatestOpenPR(owner, repo) {
 async function run() {
   try {
     const diff = execSync("git diff HEAD~1").toString();
+    const localSha = execSync("git rev-parse HEAD").toString().trim();
+
     const { owner, repo } = getRepoInfo();
     const pr = await getLatestOpenPR(owner, repo);
     if (!pr) throw new Error("No open pull requests found.");
 
+    const latestRemoteSha = pr.head.sha;
+
+    // 🔒 Step 1: Ensure code is pushed
+    if (localSha !== latestRemoteSha) {
+      console.log(`
+🚫 Your local code changes have NOT been pushed to GitHub yet.
+Local commit:  ${localSha}
+Remote (PR) commit: ${latestRemoteSha}
+
+👉 Nothing to review yet. Please push your latest commit first:
+   git push origin <branch-name>
+
+Then rerun this script to review.
+`);
+      return; // Exit gracefully without posting any review
+    }
+
+    console.log("✅ Local and remote commits match. Proceeding with review...");
+
+    // 🔍 Step 2: Generate review
     const reviewPrompt = `
 You are a code reviewer. Review the following git diff and return JSON comments only for the changed lines of code. 
 Your job is to focus on what the developer is pushing in their change and identify possible bugs, 
@@ -86,12 +108,9 @@ ${diff}
     const rawContent = res.choices[0].message.content;
     const comments = extractJSON(rawContent);
 
-    const latestCommitSha = pr.head.sha;
-    console.log(`🔗 PR #${pr.number} commit: ${latestCommitSha}`);
-
     const reviewComments = comments.map((c) => ({
       path: c.file,
-      position: c.line, // position in diff, not full file line number
+      position: c.line,
       body: c.comment,
     }));
 
@@ -101,7 +120,7 @@ ${diff}
       owner: "farrukh12255",
       repo,
       pull_number: pr.number,
-      commit_id: latestCommitSha,
+      commit_id: latestRemoteSha,
       body: "🤖 Automated review comments from AI Code Reviewer:",
       event: "COMMENT",
       comments: reviewComments,
