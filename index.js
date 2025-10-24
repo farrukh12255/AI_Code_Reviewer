@@ -51,24 +51,34 @@ async function run() {
     if (!pr) throw new Error("No open pull requests found.");
 
     const reviewPrompt = `
-You are a code reviewer. Review the following git diff and return JSON comments for changed lines.
-And your role will be comment on the difference code what developer pushing to their side and try to catch bugs
-debugger, console, code correction, time complexity, capture only code snippet where comment needed donot capture all file
-and do comment so that developer can understand easily do not focus on admirationn just focus on reviewing of code and why are you thinking so 
-much when see commented code then just say remove commented code either use it or if you forget to uncomment the uncomment code
-Each object must include:
-- "file" (path in repo)
-- "line" (the line number in the diff)
-- "comment" (your suggestion)
+    You are an AI Code Reviewer.
+    Your task is to review the provided git diff and return JSON comments for only the lines that were changed.
+    
+    🎯 Your goals:
+    Comment only on changed or newly added code lines — do not include the full file or unchanged code.
+    Identify and explain bugs, bad coding practices, and inefficiencies.
+    Flag usage of:
+    console.log, console.error, debugger
+    Poor naming conventions or confusing logic
+    Unused/commented-out code — say clearly:
+    "Remove commented-out code. Either use it or delete it if forgotten."
+    Mention time complexity issues if nested loops or inefficient logic are detected.
+    Provide clear, concise, developer-friendly comments — focus on reviewing and reasoning, not admiration or compliments.
+    If necessary, include short code snippets or examples to show how to fix or improve the code.
 
-Example:
-[
-  { "file": "src/index.js", "line": 12, "comment": "Consider using const instead of let." }
-]
+    Each object must include:
+    - "file" (path in repo)
+    - "line" (the line number in the diff)
+    - "comment" (your suggestion)
 
-Diff:
-${diff}
-`;
+    Example:
+    [
+    { "file": "src/index.js", "line": 12, "comment": "Consider using const instead of let." }
+    ]
+
+    Diff:
+    ${diff}
+    `;
 
     console.log("🧠 Sending diff to Gemini...");
     const res = await openai.chat.completions.create({
