@@ -5,12 +5,14 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// 🔐 Setup clients
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 const openai = new OpenAI({
   apiKey: process.env.GOOGLE_API_KEY,
   baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
 });
 
+// 🧩 Helper: Extract GitHub owner/repo from git remote URL
 function getRepoInfo() {
   const remoteUrl = execSync("git config --get remote.origin.url")
     .toString()
@@ -18,18 +20,21 @@ function getRepoInfo() {
   const match = remoteUrl.match(/github\.com[:/](.+?)\/(.+?)(\.git)?$/);
   if (!match)
     throw new Error("Could not parse repository info from remote URL");
-  //   const owner = match[1];
+
+  // const owner = match[1]; // auto-detect username/org
   const owner = "farrukh12255"; // force your username
   const repo = match[2];
   return { owner, repo };
 }
 
+// 🧩 Helper: Extract JSON array from AI response
 function extractJSON(text) {
   const match = text.match(/\[\s*{[\s\S]*}\s*\]/);
-  if (!match) throw new Error("No JSON found in response");
+  if (!match) throw new Error("No JSON found in AI response");
   return JSON.parse(match[0]);
 }
 
+// 🧩 Helper: Get latest open PR
 async function getLatestOpenPR(owner, repo) {
   const { data } = await octokit.pulls.list({
     owner,
@@ -39,67 +44,57 @@ async function getLatestOpenPR(owner, repo) {
     direction: "desc",
     per_page: 1,
   });
-  if (!data || data.length === 0) return null;
-  return data[0];
+  return data.length ? data[0] : null;
 }
 
+// 🚀 Main
 async function run() {
   try {
     const diff = execSync("git diff HEAD~1").toString();
     const localSha = execSync("git rev-parse HEAD").toString().trim();
-
     const { owner, repo } = getRepoInfo();
+
     const pr = await getLatestOpenPR(owner, repo);
     if (!pr) throw new Error("No open pull requests found.");
 
     const latestRemoteSha = pr.head.sha;
 
-    // 🔒 Step 1: Ensure code is pushed
+    // 🧠 Check commit sync
     if (localSha !== latestRemoteSha) {
       console.log(`
-🚫 Your local code changes have NOT been pushed to GitHub yet.
+🚫 Your local changes are not pushed yet.
 Local commit:  ${localSha}
-Remote (PR) commit: ${latestRemoteSha}
+Remote commit: ${latestRemoteSha}
 
-👉 Nothing to review yet. Please push your latest commit first:
+👉 Please push your latest commit first:
    git push origin <branch-name>
 
-Then rerun this script to review.
+Then rerun this script.
 `);
-      return; // Exit gracefully without posting any review
+      return;
     }
 
     console.log("✅ Local and remote commits match. Proceeding with review...");
 
-    // 🔍 Step 2: Generate review
+    // 🧠 Send diff to Gemini
     const reviewPrompt = `
-You are a code reviewer. Review the following git diff and return JSON comments only for the changed lines of code. 
-Your job is to focus on what the developer is pushing in their change and identify possible bugs, 
-poor coding practices, or performance issues. Pay attention to the use of debugger, console.log, 
-unnecessary commented-out code, and inefficient code that affects time complexity. Capture only the specific 
-code snippet or line where a comment is needed; do not include or output the full file. When you see commented-out code,
-just mention clearly to remove it, saying that either it should be used or deleted if forgotten. Write your comments 
-in a way that is easy for the developer to understand and act upon. Do not add unnecessary 
-admiration or praise — stay focused on reviewing the code and explaining the reasoning behind your comments. 
-If you find code that can be optimized, explain why and provide a short, simple example of how it can be improved. 
-Your output must be in JSON format, where each object contains the line number, a clear comment describing the issue, 
-and if applicable, a short suggestion or example showing how to fix it
+You are a senior code reviewer. Review this git diff carefully and provide comments only for changed lines.
+Focus on:
+- Bugs or potential logic errors
+- Inefficient code
+- Unused or commented-out code
+- Debug or console.log statements left behind
 
-Each object must include:
-- "file" (path in repo)
-- "line" (the line number in the diff)
-- "comment" (your suggestion)
-
-Example:
+Output JSON only in this format:
 [
-  { "file": "src/index.js", "line": 12, "comment": "Consider using const instead of let." }
+  { "file": "src/App.js", "line": 42, "comment": "Consider removing console.log in production." }
 ]
 
 Diff:
 ${diff}
 `;
 
-    console.log("🧠 Sending diff to Gemini...");
+    console.log("🧠 Sending diff to Gemini for review...");
     const res = await openai.chat.completions.create({
       model: "gemini-2.0-flash",
       messages: [{ role: "user", content: reviewPrompt }],
@@ -108,27 +103,54 @@ ${diff}
     const rawContent = res.choices[0].message.content;
     const comments = extractJSON(rawContent);
 
-    const reviewComments = comments.map((c) => ({
-      path: c.file,
-      position: c.line,
-      body: c.comment,
-    }));
+    if (!comments.length) {
+      console.log("✅ No issues found — clean PR!");
+      await octokit.pulls.createReview({
+        owner,
+        repo,
+        pull_number: pr.number,
+        body: "🤖 AI Review: No issues found — PR looks good!",
+        event: "APPROVE",
+      });
+      return;
+    }
 
-    console.log("💬 Posting inline review comments...");
+    console.log(
+      `💬 Found ${comments.length} issues, posting inline comments...`
+    );
 
+    // 💬 Post each comment individually
+    for (const c of comments) {
+      try {
+        await octokit.pulls.createReviewComment({
+          owner,
+          repo,
+          pull_number: pr.number,
+          commit_id: latestRemoteSha,
+          path: c.file,
+          body: c.comment,
+          line: c.line,
+          side: "RIGHT",
+        });
+        console.log(`✅ Comment added: ${c.file}:${c.line}`);
+      } catch (err) {
+        console.warn(`⚠️ Skipped ${c.file}:${c.line}: ${err.message}`);
+      }
+    }
+
+    // 🧾 Add summary comment
     await octokit.pulls.createReview({
       owner: "farrukh12255",
       repo,
       pull_number: pr.number,
       commit_id: latestRemoteSha,
-      body: "🤖 Automated review comments from AI Code Reviewer:",
+      body: "🤖 AI Review completed — please check inline comments above.",
       event: "COMMENT",
-      comments: reviewComments,
     });
 
-    console.log("✅ Inline review comments successfully posted!");
+    console.log("✅ AI review completed successfully!");
   } catch (err) {
-    console.error("❌ Error:", err);
+    console.error("❌ Error:", err.message);
   }
 }
 
