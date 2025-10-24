@@ -51,34 +51,31 @@ async function run() {
     if (!pr) throw new Error("No open pull requests found.");
 
     const reviewPrompt = `
-    You are an AI Code Reviewer.
-    Your task is to review the provided git diff and return JSON comments for only the lines that were changed.
-    
-    🎯 Your goals:
-    Comment only on changed or newly added code lines — do not include the full file or unchanged code.
-    Identify and explain bugs, bad coding practices, and inefficiencies.
-    Flag usage of:
-    console.log, console.error, debugger
-    Poor naming conventions or confusing logic
-    Unused/commented-out code — say clearly:
-    "Remove commented-out code. Either use it or delete it if forgotten."
-    Mention time complexity issues if nested loops or inefficient logic are detected.
-    Provide clear, concise, developer-friendly comments — focus on reviewing and reasoning, not admiration or compliments.
-    If necessary, include short code snippets or examples to show how to fix or improve the code.
+You are a code reviewer. Review the following git diff and return JSON comments only for the changed lines of code. 
+Your job is to focus on what the developer is pushing in their change and identify possible bugs, 
+poor coding practices, or performance issues. Pay attention to the use of debugger, console.log, 
+unnecessary commented-out code, and inefficient code that affects time complexity. Capture only the specific 
+code snippet or line where a comment is needed; do not include or output the full file. When you see commented-out code,
+just mention clearly to remove it, saying that either it should be used or deleted if forgotten. Write your comments 
+in a way that is easy for the developer to understand and act upon. Do not add unnecessary 
+admiration or praise — stay focused on reviewing the code and explaining the reasoning behind your comments. 
+If you find code that can be optimized, explain why and provide a short, simple example of how it can be improved. 
+Your output must be in JSON format, where each object contains the line number, a clear comment describing the issue, 
+and if applicable, a short suggestion or example showing how to fix it
 
-    Each object must include:
-    - "file" (path in repo)
-    - "line" (the line number in the diff)
-    - "comment" (your suggestion)
+Each object must include:
+- "file" (path in repo)
+- "line" (the line number in the diff)
+- "comment" (your suggestion)
 
-    Example:
-    [
-    { "file": "src/index.js", "line": 12, "comment": "Consider using const instead of let." }
-    ]
+Example:
+[
+  { "file": "src/index.js", "line": 12, "comment": "Consider using const instead of let." }
+]
 
-    Diff:
-    ${diff}
-    `;
+Diff:
+${diff}
+`;
 
     console.log("🧠 Sending diff to Gemini...");
     const res = await openai.chat.completions.create({
