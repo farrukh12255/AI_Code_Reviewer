@@ -1,4 +1,5 @@
 name: LLM Code Review
+
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -13,8 +14,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run code review
-        uses: farrukh12255/llm-code-review@v1.0.0
+      - name: Use dynamic repository context
+        run: |
+          echo "Repository Owner: ${{ github.repository_owner }}"
+          echo "Repository Name: ${{ github.repository }}"
+
+          # You can now use these dynamically in scripts or other actions.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
