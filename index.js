@@ -54,7 +54,8 @@ async function run() {
 You are a code reviewer. Review the following git diff and return JSON comments for changed lines.
 And your role will be comment on the difference code what developer pushing to their side and try to catch bugs
 debugger, console, code correction, time complexity, capture only code snippet where comment needed donot capture all file
-and do comment so that developer can understand easily do not focus on admirationn just focus on reviewing of code.
+and do comment so that developer can understand easily do not focus on admirationn just focus on reviewing of code and why are you thinking so 
+much when see commented code then just say remove commented code either use it or if you forget to uncomment the uncomment code
 Each object must include:
 - "file" (path in repo)
 - "line" (the line number in the diff)
