@@ -2,6 +2,9 @@ name: LLM Code Review
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
 
 jobs:
   review:
@@ -11,7 +14,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run code review
-        uses: your-username/llm-code-review@v1
+        uses: farrukh12255/llm-code-review@v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
