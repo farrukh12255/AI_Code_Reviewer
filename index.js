@@ -51,11 +51,18 @@ async function run() {
     if (!pr) throw new Error("No open pull requests found.");
 
     const reviewPrompt = `
-You are a code reviewer. Review the following git diff and return JSON comments for changed lines.
-And your role will be comment on the difference code what developer pushing to their side and try to catch bugs
-debugger, console, code correction, time complexity, capture only code snippet where comment needed donot capture all file
-and do comment so that developer can understand easily do not focus on admirationn just focus on reviewing of code and why are you thinking so 
-much when see commented code then just say remove commented code either use it or if you forget to uncomment the uncomment code
+You are a code reviewer. Review the following git diff and return JSON comments only for the changed lines of code. 
+Your job is to focus on what the developer is pushing in their change and identify possible bugs, 
+poor coding practices, or performance issues. Pay attention to the use of debugger, console.log, 
+unnecessary commented-out code, and inefficient code that affects time complexity. Capture only the specific 
+code snippet or line where a comment is needed; do not include or output the full file. When you see commented-out code,
+just mention clearly to remove it, saying that either it should be used or deleted if forgotten. Write your comments 
+in a way that is easy for the developer to understand and act upon. Do not add unnecessary 
+admiration or praise — stay focused on reviewing the code and explaining the reasoning behind your comments. 
+If you find code that can be optimized, explain why and provide a short, simple example of how it can be improved. 
+Your output must be in JSON format, where each object contains the line number, a clear comment describing the issue, 
+and if applicable, a short suggestion or example showing how to fix it
+
 Each object must include:
 - "file" (path in repo)
 - "line" (the line number in the diff)
