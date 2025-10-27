@@ -2,6 +2,7 @@ import { Octokit } from "@octokit/rest";
 import OpenAI from "openai";
 import { execSync } from "child_process";
 import dotenv from "dotenv";
+import fs from "fs";
 
 dotenv.config();
 
@@ -47,6 +48,22 @@ async function getLatestOpenPR(owner, repo) {
   return data.length ? data[0] : null;
 }
 
+// 🧩 Helper: State file (track last reviewed PR/commit)
+function getLastReviewedSha() {
+  try {
+    return JSON.parse(fs.readFileSync(".last_pr_sha.json", "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveLastReviewedSha(prNumber, commitSha) {
+  fs.writeFileSync(
+    ".last_pr_sha.json",
+    JSON.stringify({ prNumber, commitSha }, null, 2)
+  );
+}
+
 // 🚀 Main
 async function run() {
   try {
@@ -74,20 +91,34 @@ Then rerun this script.
       return;
     }
 
+    const last = getLastReviewedSha();
+    if (last.prNumber !== pr.number || last.commitSha !== latestRemoteSha) {
+      console.log(
+        "🕒 PR just created or updated — skipping initial review run."
+      );
+      saveLastReviewedSha(pr.number, latestRemoteSha);
+      return;
+    }
+
     console.log("✅ Local and remote commits match. Proceeding with review...");
 
-    // 🧠 Send diff to Gemini
+    // 🧠 Improved Gemini review prompt
     const reviewPrompt = `
-You are a senior code reviewer. Review this git diff carefully and provide comments only for changed lines.
-Focus on:
-- Bugs or potential logic errors
-- Inefficient code
-- Unused or commented-out code
-- Debug or console.log statements left behind
+You are a strict code reviewer. Review ONLY the lines of code that changed in the provided git diff.
+Ignore commit messages, metadata, and unchanged code.
 
-Output JSON only in this format:
+Focus on:
+- Bugs, performance issues, poor practices.
+- Use of console.log, debugger, commented-out code.
+- Inefficient code or possible optimizations.
+
+Ignore:
+- Non-code files (package-lock.json, config files, etc.)
+- General opinions, praise, or unrelated feedback.
+
+Output JSON only, like:
 [
-  { "file": "src/App.js", "line": 42, "comment": "Consider removing console.log in production." }
+  { "file": "src/index.js", "line": 12, "comment": "Remove console.log before committing." }
 ]
 
 Diff:
@@ -103,24 +134,34 @@ ${diff}
     const rawContent = res.choices[0].message.content;
     const comments = extractJSON(rawContent);
 
-    if (!comments.length) {
-      console.log("✅ No issues found — clean PR!");
+    // 🧩 Filter irrelevant comments
+    const relevantComments = comments.filter(
+      (c) =>
+        c.comment &&
+        c.comment.length > 5 &&
+        !c.comment.match(/looks good|nice work|great/i)
+    );
+
+    if (!relevantComments.length) {
+      console.log(
+        "✅ No relevant code issues found — skipping review comments."
+      );
       await octokit.pulls.createReview({
         owner,
         repo,
         pull_number: pr.number,
-        body: "🤖 AI Review: No issues found — PR looks good!",
+        body: "🤖 AI Review: No issues found — PR looks clean!",
         event: "APPROVE",
       });
       return;
     }
 
     console.log(
-      `💬 Found ${comments.length} issues, posting inline comments...`
+      `💬 Found ${relevantComments.length} issues, posting comments...`
     );
 
     // 💬 Post each comment individually
-    for (const c of comments) {
+    for (const c of relevantComments) {
       try {
         await octokit.pulls.createReviewComment({
           owner,
@@ -140,7 +181,7 @@ ${diff}
 
     // 🧾 Add summary comment
     await octokit.pulls.createReview({
-      owner: "farrukh12255",
+      owner,
       repo,
       pull_number: pr.number,
       commit_id: latestRemoteSha,

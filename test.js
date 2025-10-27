@@ -68,4 +68,4 @@ setTimeout(function () {
 
 console.log("End  code!");
 
-debugger;
+debugger
