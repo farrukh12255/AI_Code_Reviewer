@@ -294,7 +294,7 @@ async function run() {
 You are an **AI code reviewer**. Analyze only the changed lines in this diff.
 Return JSON in the format:
 [
-  { "file": "filename", "line": 12, "comment": "Describe the issue" }
+  { "file": "src/App.js", "line": 42, "comment": "Consider removing console.log in production." }
 ]
 
 Rules:
