@@ -200,6 +200,7 @@ import { Octokit } from "@octokit/rest";
 import OpenAI from "openai";
 import dotenv from "dotenv";
 import fs from "fs";
+import { execSync } from "child_process";
 
 dotenv.config();
 
@@ -212,8 +213,7 @@ const openai = new OpenAI({
 
 // 🧩 Helper: Extract GitHub owner/repo from git remote URL
 function getRepoInfo() {
-  const remoteUrl = require("child_process")
-    .execSync("git config --get remote.origin.url")
+  const remoteUrl = execSync("git config --get remote.origin.url")
     .toString()
     .trim();
   const match = remoteUrl.match(/github\.com[:/](.+?)\/(.+?)(\.git)?$/);
