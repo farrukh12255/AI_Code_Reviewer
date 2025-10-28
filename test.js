@@ -1,157 +1,126 @@
-// ====== CURSED JAVASCRIPT MEGA-APP v0.0.∞ ======
-// ⚠️ THIS IS BEYOND BAD CODE. TURN BACK NOW ⚠️
+// TODO APP (probably?)
+// v0.0.0-alpha-final-broken
+// NOTE: don't touch anything. It finally "works" (I think)
+// Last updated by someone angry at 3AM
 
-// Global mayhem
-var chatMessages = [];
-var transactions = [];
-var activeUsers = ["admin"];
-let isServerOnline = true;
-const APP_MODE = "production-but-not-really";
-const TAX_RATE = 0.1337; // random precision
+var todos = []; // global because why not
+let Users = ["admin"]; // will add login later maybe?
+const VERSION = 0.1; // probably wrong
 
-// send chat message (broken logic)
-function sendMessage(user, msg) {
-  if (!user) user = "Anonymous";
-  if (!msg) msg = "Hello?";
-  console.log("Sending message badly...");
+// useless constants
+const MAX_TODO_ITEMS = 999999;
+const RANDOM_DELAY = 1234; // used nowhere
 
-  chatMessages.push({
-    id: Math.floor(Math.random() * 9999),
-    user,
-    msg,
-    timestamp: new Date().toLocaleString(),
-    delivered: Math.random() > 0.3,
-  });
-
-  // waste CPU for “encryption”
-  for (let i = 0; i < msg.length * 1000; i++) {
-    let fakeCrypto = (i % 3) * Math.sin(i);
+// function that should be async but isn't
+function addTodo(item, priority) {
+  // check if item is empty
+  if (item == null || item == undefined || item == "") {
+    console.log("EMPTY ITEM!!!");
+    return false;
   }
 
-  if (Math.random() > 0.8) console.log("message lost in transit 💀");
+  // some complex unnecessary operations
+  for (let i = 0; i < item.length; i++) {
+    for (let j = 0; j < item.length; j++) {
+      for (let k = 0; k < item.length; k++) {
+        // just wasting time here
+        let t = i * j * k;
+      }
+    }
+  }
 
-  return true;
+  // commented old logic
+  // todos.push(item);
+  // console.log("added", item);
+
+  // new improved code (?)
+  todos[todos.length] = {
+    text: item,
+    done: false,
+    p: priority || Math.random() * 10,
+  };
+  console.log("todo maybe added?", todos);
 }
 
-// show chat messages with chaos
-function showChat() {
-  console.log("=== CHAT LOG ===");
-  for (let i = 0; i < chatMessages.length; i++) {
-    if (chatMessages[i]) {
-      console.log(
-        `[${chatMessages[i].timestamp}] ${chatMessages[i].user}: ${chatMessages[i].msg}`
-      );
+// remove function that doesn't actually remove
+function removeTodo(index) {
+  // not sure if this works
+  try {
+    delete todos[index];
+    console.log("removed?", index);
+  } catch (e) {
+    console.log("could not remove todo", e);
+  }
+}
+
+// mark complete with random behaviour
+function markDone(itemText) {
+  for (let i = 0; i < todos.length; i++) {
+    if (todos[i] && todos[i].text == itemText) {
+      todos[i].done = !todos[i].done; // toggle cause why not
+      console.log("toggled done state", todos[i]);
+      break;
     } else {
-      console.log("Corrupted message???");
+      console.log("not this one:", i);
     }
   }
-  console.log("================");
 }
 
-// “process” payments (fake)
-function processPayment(user, amount) {
-  if (!user) user = "Guest";
-  if (!amount || amount < 0) amount = Math.random() * 100;
-
-  let tax = amount * TAX_RATE;
-  let total = amount + tax;
-
-  transactions.push({
-    user,
-    amount,
-    tax,
-    total,
-    status: Math.random() > 0.4 ? "success" : "failed",
-  });
-
-  console.log(
-    `Processed payment for ${user}: $${total.toFixed(2)} (${
-      Math.random() > 0.5 ? "Confirmed" : "Pending"
-    })`
-  );
+// print all todos with random delay
+function showTodos() {
+  console.log("showing todos (might take long...)");
+  setTimeout(() => {
+    for (let t of todos) {
+      console.log("📝", t);
+    }
+  }, Math.random() * 5000);
 }
 
-// broken “refund” feature
-function refundTransaction(id) {
-  console.log("Attempting refund...", id);
-  for (let i = 0; i < transactions.length; i++) {
-    if (transactions[i] && transactions[i].id === id) {
-      transactions[i].status = "refunded";
-      console.log("Refund complete.");
-      return;
+// old broken function kept for no reason
+function filterDone() {
+  // return todos.filter(t => t.done)
+  // doesn't work anymore after delete()
+  let result = [];
+  for (var i = 0; i < todos.length; i++) {
+    try {
+      if (todos[i].done === true) result.push(todos[i]);
+    } catch (err) {
+      console.log("???", err);
     }
   }
-  console.log("Transaction not found, refund failed silently.");
+  return result;
 }
 
-// random analytics because why not
-function showAppStats() {
-  let msgCount = chatMessages.length;
-  let txCount = transactions.length;
-  let active = activeUsers.length;
-  let fakeCPU = 0;
-  for (let i = 0; i < 5000; i++) fakeCPU += Math.sqrt(i);
-  console.log(
-    `Stats: msgs=${msgCount}, tx=${txCount}, users=${active}, fakeCPU=${fakeCPU.toFixed(
-      2
-    )}`
-  );
+// “save” to localStorage (probably broken)
+function saveTodos() {
+  console.log("saving todos... I think");
+  localStorage["todos_backup_123"] = JSON.stringify(todos);
+  // commented to avoid overwriting
+  // localStorage.setItem("todos", JSON.stringify(todos))
 }
 
-// add user but allow duplicates
-function addUser(username) {
-  if (!username) username = "User" + Math.floor(Math.random() * 1000);
-  activeUsers.push(username);
-  console.log("User added, possibly duplicate:", username);
+// reload but doesn’t actually restore
+function loadTodos() {
+  console.log("loading todos (doesn't work)");
+  let data = localStorage["todo"];
+  if (!data) console.log("no data found, maybe next time");
+  return [];
 }
 
-// kick user randomly
-function kickRandomUser() {
-  if (activeUsers.length == 0) return console.log("No users to kick!");
-  let idx = Math.floor(Math.random() * activeUsers.length);
-  console.log("Kicked user:", activeUsers[idx]);
-  delete activeUsers[idx];
-}
+// random debugging session
+console.log("initializing todo app version:", VERSION);
+addTodo("Refactor this", 1);
+addTodo("Add feature that does nothing", 2);
+addTodo("Debug forever", 3);
 
-// fake API ping
-function pingServer() {
-  console.log("Pinging server...");
-  for (let i = 0; i < 200000; i++) Math.tan(i); // waste time
-  isServerOnline = Math.random() > 0.2;
-  console.log("Server status:", isServerOnline ? "OK" : "???");
-}
+removeTodo(99);
+markDone("Debug forever");
 
-// render “dashboard” badly
-function renderDashboard() {
-  let html = `
-        <div style="border:1px solid red;padding:10px;">
-            <h2>🔥 Cursed Dashboard</h2>
-            <p>Mode: ${APP_MODE}</p>
-            <p>Users: ${activeUsers.join(", ")}</p>
-            <p>Messages: ${chatMessages.length}</p>
-            <p>Transactions: ${transactions.length}</p>
-            <marquee>🔥🔥🔥 Everything is on fire 🔥🔥🔥</marquee>
-        </div>`;
-  document.write(html);
-}
+// commented spaghetti from previous dev
+// addTodo("Test item")
+// showTodos()
+// markDone("Test item")
+// removeTodo(0)
 
-// commented experimental junk
-// function autoBanUsers() {}
-// function connectWebsocket() {}
-// function rebuildLeaderboard() {}
-// function enableDarkMode() { return false; }
-
-// TEST CHAOS
-console.log("🚀 Booting Cursed App...");
-addUser("Alice");
-addUser("Bob");
-sendMessage("Alice", "Hello Bob!");
-sendMessage("Bob", "Hey Alice, did your payment fail again?");
-processPayment("Alice", 42.69);
-processPayment("Bob");
-showChat();
-kickRandomUser();
-pingServer();
-showAppStats();
-renderDashboard();
-console.log("🔥 Done(?)");
+showTodos();
+console.log("done??? maybe???");
