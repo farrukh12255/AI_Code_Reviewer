@@ -246,7 +246,7 @@ async function getLatestOpenPR(owner, repo) {
   return data.length ? data[0] : null;
 }
 
-// 🧩 Helper: State file (track last reviewed PR/commit)
+// 🧩 Helper: Track last reviewed commit
 function getLastReviewedSha() {
   try {
     return JSON.parse(fs.readFileSync(".last_pr_sha.json", "utf-8"));
@@ -267,14 +267,12 @@ async function run() {
   try {
     const { owner, repo } = getRepoInfo();
 
-    // Get latest open PR from remote
+    // 🧾 Get latest open PR
     const pr = await getLatestOpenPR(owner, repo);
     if (!pr) throw new Error("No open pull requests found.");
-
     const latestRemoteSha = pr.head.sha;
-    const last = getLastReviewedSha();
 
-    // 🚫 Skip if we’ve already reviewed this commit
+    const last = getLastReviewedSha();
     if (last.prNumber === pr.number && last.commitSha === latestRemoteSha) {
       console.log(
         "🕒 PR commit already reviewed — skipping duplicate comments."
@@ -284,57 +282,70 @@ async function run() {
 
     console.log(`✅ Reviewing PR #${pr.number} (${latestRemoteSha})...`);
 
-    // 🧠 Get PR diff from GitHub (not local!)
-    const { data: diff } = await octokit.request(
-      `GET /repos/${owner}/${repo}/pulls/${pr.number}`,
-      {
-        owner,
-        repo,
-        pull_number: pr.number,
-        headers: { Accept: "application/vnd.github.v3.diff" },
-      }
-    );
+    // 🧩 Get list of changed files with patches
+    const { data: files } = await octokit.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: pr.number,
+    });
 
-    // 🧠 AI Review prompt
-    const reviewPrompt = `
-You are a strict code reviewer. Review ONLY the lines of code that changed in the provided git diff.
+    const allComments = [];
+
+    // 🧠 Analyze each changed file patch-by-patch
+    for (const file of files) {
+      if (!file.patch) continue; // skip binary or deleted files
+
+      const reviewPrompt = `
+You are a strict code reviewer. Review ONLY the lines of code that changed in this unified diff patch.
 Ignore commit messages, metadata, and unchanged code.
 
 Focus on:
-- Bugs, performance issues, poor practices.
-- Use of console.log, debugger, commented-out code.
-- Inefficient or redundant code.
-Ignore:
-- Non-code files (package-lock.json, config files, etc.)
-- General opinions or praise.
+- Unused variables/constants.
+- Functions that should be async but aren’t.
+- Poor practices, bugs, inefficiencies.
+- console.log or debugger statements.
+- Redundant or commented-out code.
 
-Output JSON only, like:
+Output JSON ONLY:
 [
-  { "file": "src/index.js", "line": 12, "comment": "Remove console.log before committing." }
+  { "file": "${file.filename}", "line": 12, "comment": "Example issue here" }
 ]
 
-Diff:
-${diff}
+Patch:
+${file.patch}
 `;
 
-    console.log("🧠 Sending PR diff to Gemini for review...");
-    const res = await openai.chat.completions.create({
-      model: "gemini-2.0-flash",
-      messages: [{ role: "user", content: reviewPrompt }],
-    });
+      console.log(`🧠 Reviewing file: ${file.filename}`);
 
-    const rawContent = res.choices[0].message.content;
-    const comments = extractJSON(rawContent);
+      try {
+        const res = await openai.chat.completions.create({
+          model: "gemini-2.0-flash",
+          messages: [{ role: "user", content: reviewPrompt }],
+        });
 
-    // 🧹 Filter irrelevant comments
-    const relevantComments = comments.filter(
-      (c) =>
-        c.comment &&
-        c.comment.length > 5 &&
-        !c.comment.match(/looks good|nice work|great/i)
-    );
+        const raw = res.choices[0].message.content;
+        const comments = extractJSON(raw);
 
-    if (!relevantComments.length) {
+        for (const c of comments) {
+          if (
+            c.comment &&
+            c.comment.length > 5 &&
+            !c.comment.match(/looks good|nice work|great/i)
+          ) {
+            allComments.push({
+              path: c.file || file.filename,
+              line: c.line,
+              side: "RIGHT",
+              body: c.comment.trim(),
+            });
+          }
+        }
+      } catch (err) {
+        console.warn(`⚠️ Skipped ${file.filename}: ${err.message}`);
+      }
+    }
+
+    if (!allComments.length) {
       console.log("✅ No relevant issues found — PR looks clean!");
       await octokit.pulls.createReview({
         owner,
@@ -343,23 +354,13 @@ ${diff}
         body: "🤖 AI Review: No issues found — PR looks clean!",
         event: "APPROVE",
       });
-
       saveLastReviewedSha(pr.number, latestRemoteSha);
       return;
     }
 
-    console.log(
-      `💬 Found ${relevantComments.length} issues, posting review...`
-    );
+    console.log(`💬 Found ${allComments.length} issues — posting review once.`);
 
-    // 🧾 Post all comments in one review
-    const reviewComments = relevantComments.map((c) => ({
-      path: c.file,
-      line: c.line,
-      side: "RIGHT",
-      body: c.comment,
-    }));
-
+    // 💬 Post all comments in one GitHub review
     await octokit.pulls.createReview({
       owner,
       repo,
@@ -367,11 +368,13 @@ ${diff}
       commit_id: latestRemoteSha,
       body: "🤖 AI Review completed — please check inline comments.",
       event: "COMMENT",
-      comments: reviewComments,
+      comments: allComments,
     });
 
     saveLastReviewedSha(pr.number, latestRemoteSha);
-    console.log("✅ AI review completed successfully (comments added once).");
+    console.log(
+      "✅ AI review completed successfully (comments aligned with code)."
+    );
   } catch (err) {
     console.error("❌ Error:", err.message);
   }
