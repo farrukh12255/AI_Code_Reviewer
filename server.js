@@ -37,18 +37,35 @@ function saveLastReviewedSha(prNumber, commitSha) {
 function extractAddedLines(patch) {
   const added = [];
   const lines = patch.split("\n");
-  let lineNumber = 0;
+
+  let currentLine = 0;
+  let inHunk = false;
+
   for (const l of lines) {
     if (l.startsWith("@@")) {
-      const match = l.match(/\+(\d+)/);
-      lineNumber = match ? parseInt(match[1], 10) - 1 : lineNumber;
-    } else if (l.startsWith("+") && !l.startsWith("+++")) {
-      lineNumber++;
-      added.push({ line: lineNumber, code: l.replace(/^\+/, "") });
-    } else if (!l.startsWith("-")) {
-      lineNumber++;
+      // Match hunk header: @@ -oldStart,oldLen +newStart,newLen @@
+      const match = l.match(/\+(\d+)(?:,(\d+))?/);
+      if (match) {
+        currentLine = parseInt(match[1], 10) - 1;
+        inHunk = true;
+      }
+      continue;
+    }
+
+    if (!inHunk) continue;
+
+    if (l.startsWith("+") && !l.startsWith("+++")) {
+      currentLine++;
+      added.push({ line: currentLine, code: l.slice(1) });
+    } else if (l.startsWith("-")) {
+      // deleted line (don't increment new file line)
+      continue;
+    } else {
+      // context line (exists in both versions)
+      currentLine++;
     }
   }
+
   return added;
 }
 
