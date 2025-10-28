@@ -318,6 +318,7 @@ Focus on:
 - Unnecessary console.log/debugger statements
 - Async or missing error handling
 - Code smell or redundant logic
+- Try to use latest js code implementaion
 
 Output JSON only:
 [
