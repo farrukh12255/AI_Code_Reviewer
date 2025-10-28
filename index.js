@@ -220,8 +220,7 @@ function getRepoInfo() {
   if (!match)
     throw new Error("Could not parse repository info from remote URL");
 
-  // const owner = match[1]; // auto-detect username/org
-  const owner = "farrukh12255"; // hardcoded owner
+  const owner = "farrukh12255"; // 🔧 hardcoded owner (adjust if needed)
   const repo = match[2];
   return { owner, repo };
 }
@@ -291,7 +290,6 @@ async function run() {
 
     const allComments = [];
 
-    // 🧠 Analyze each changed file patch-by-patch
     for (const file of files) {
       if (!file.patch) continue; // skip binary or deleted files
 
@@ -326,48 +324,58 @@ ${file.patch}
         const raw = res.choices[0].message.content;
         const comments = extractJSON(raw);
 
-        // 🧩 Add code context snippet around the comment line
         const patchLines = file.patch.split("\n");
 
         for (const c of comments) {
-          if (
-            c.comment &&
-            c.comment.length > 5 &&
-            !c.comment.match(/looks good|nice work|great/i)
-          ) {
-            // Try to infer diff line index
-            const targetIndex = c.line
-              ? patchLines.findIndex(
-                  (line) => line.startsWith(`+`) && !line.startsWith(`+++`)
-                )
-              : -1;
+          if (!c.comment || c.comment.length < 5) continue;
+          if (/looks good|nice work|great/i.test(c.comment)) continue;
 
-            let context = "";
-            if (targetIndex !== -1) {
-              const start = Math.max(0, targetIndex - 3);
-              const end = Math.min(patchLines.length, targetIndex + 3);
-              context = patchLines
-                .slice(start, end)
-                .filter((l) => l.trim().length > 0)
-                .map((l) => l.replace(/^[+-]/, "")) // clean up diff symbols
-                .join("\n");
+          // 🔍 Match exact diff line
+          let targetIndex = -1;
+          let currentLine = 0;
+          for (let i = 0; i < patchLines.length; i++) {
+            const line = patchLines[i];
+            if (line.startsWith("+") && !line.startsWith("+++")) currentLine++;
+            if (currentLine === c.line) {
+              targetIndex = i;
+              break;
             }
+          }
 
-            const bodyWithContext = context
-              ? `\`\`\`js
+          let context = "";
+          if (targetIndex !== -1) {
+            const start = Math.max(0, targetIndex - 2);
+            const end = Math.min(patchLines.length, targetIndex + 3);
+            context = patchLines
+              .slice(start, end)
+              .filter((l) => l.trim().length > 0)
+              .map((l) => l.replace(/^[+-]/, ""))
+              .join("\n");
+          }
+
+          const bodyWithContext = context
+            ? `\`\`\`js
 ${context.trim()}
 \`\`\`
 
 💡 **AI Review:** ${c.comment.trim()}`
-              : `💡 **AI Review:** ${c.comment.trim()}`;
+            : `💡 **AI Review:** ${c.comment.trim()}`;
 
-            allComments.push({
-              path: c.file || file.filename,
-              line: c.line,
-              side: "RIGHT",
-              body: bodyWithContext,
-            });
-          }
+          // 🔁 Avoid duplicate comments
+          const isDuplicate = allComments.some(
+            (existing) =>
+              existing.path === (c.file || file.filename) &&
+              existing.line === c.line &&
+              existing.body === bodyWithContext
+          );
+          if (isDuplicate) continue;
+
+          allComments.push({
+            path: c.file || file.filename,
+            line: c.line,
+            side: "RIGHT",
+            body: bodyWithContext,
+          });
         }
       } catch (err) {
         console.warn(`⚠️ Skipped ${file.filename}: ${err.message}`);
@@ -389,7 +397,6 @@ ${context.trim()}
 
     console.log(`💬 Found ${allComments.length} issues — posting review once.`);
 
-    // 💬 Post all comments in one GitHub review
     await octokit.pulls.createReview({
       owner,
       repo,
@@ -402,7 +409,7 @@ ${context.trim()}
 
     saveLastReviewedSha(pr.number, latestRemoteSha);
     console.log(
-      "✅ AI review completed successfully (comments aligned and contextual)."
+      "✅ AI review completed successfully with contextual comments."
     );
   } catch (err) {
     console.error("❌ Error:", err.message);
