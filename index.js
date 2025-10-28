@@ -326,17 +326,46 @@ ${file.patch}
         const raw = res.choices[0].message.content;
         const comments = extractJSON(raw);
 
+        // 🧩 Add code context snippet around the comment line
+        const patchLines = file.patch.split("\n");
+
         for (const c of comments) {
           if (
             c.comment &&
             c.comment.length > 5 &&
             !c.comment.match(/looks good|nice work|great/i)
           ) {
+            // Try to infer diff line index
+            const targetIndex = c.line
+              ? patchLines.findIndex(
+                  (line) => line.startsWith(`+`) && !line.startsWith(`+++`)
+                )
+              : -1;
+
+            let context = "";
+            if (targetIndex !== -1) {
+              const start = Math.max(0, targetIndex - 3);
+              const end = Math.min(patchLines.length, targetIndex + 3);
+              context = patchLines
+                .slice(start, end)
+                .filter((l) => l.trim().length > 0)
+                .map((l) => l.replace(/^[+-]/, "")) // clean up diff symbols
+                .join("\n");
+            }
+
+            const bodyWithContext = context
+              ? `\`\`\`js
+${context.trim()}
+\`\`\`
+
+💡 **AI Review:** ${c.comment.trim()}`
+              : `💡 **AI Review:** ${c.comment.trim()}`;
+
             allComments.push({
               path: c.file || file.filename,
               line: c.line,
               side: "RIGHT",
-              body: c.comment.trim(),
+              body: bodyWithContext,
             });
           }
         }
@@ -366,14 +395,14 @@ ${file.patch}
       repo,
       pull_number: pr.number,
       commit_id: latestRemoteSha,
-      body: "🤖 AI Review completed — please check inline comments.",
+      body: "🤖 AI Review completed — please check inline comments with context below.",
       event: "COMMENT",
       comments: allComments,
     });
 
     saveLastReviewedSha(pr.number, latestRemoteSha);
     console.log(
-      "✅ AI review completed successfully (comments aligned with code)."
+      "✅ AI review completed successfully (comments aligned and contextual)."
     );
   } catch (err) {
     console.error("❌ Error:", err.message);
