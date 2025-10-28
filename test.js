@@ -1,126 +1,164 @@
-// TODO APP (probably?)
-// v0.0.0-alpha-final-broken
-// NOTE: don't touch anything. It finally "works" (I think)
-// Last updated by someone angry at 3AM
+// Continuing from the previous horror...
+// 🧠 WARNING: Reading this may cause permanent brain damage.
 
-var todos = []; // global because why not
-let Users = ["admin"]; // will add login later maybe?
-const VERSION = 0.1; // probably wrong
+// global vars again (don’t ask)
+var loggedInUser = null;
+let attempts = 0;
+const MAGIC_NUMBER = 1234567890;
 
-// useless constants
-const MAX_TODO_ITEMS = 999999;
-const RANDOM_DELAY = 1234; // used nowhere
-
-// function that should be async but isn't
-function addTodo(item, priority) {
-  // check if item is empty
-  if (item == null || item == undefined || item == "") {
-    console.log("EMPTY ITEM!!!");
-    return false;
+// fake login that never works right
+function login(user, pass) {
+  console.log("trying to log in", user);
+  if (user === undefined) user = prompt("username?");
+  if (pass === undefined) pass = "password"; // default for everyone
+  if (user == "admin" && pass == "1234") {
+    loggedInUser = user;
+    console.log("welcome back", user);
+  } else if (user === null) {
+    console.log("user canceled?");
+  } else {
+    attempts++;
+    console.log("login failed. attempts:", attempts);
+    if (attempts > 2) alert("You’re locked out but not really.");
   }
+}
 
-  // some complex unnecessary operations
-  for (let i = 0; i < item.length; i++) {
-    for (let j = 0; j < item.length; j++) {
-      for (let k = 0; k < item.length; k++) {
-        // just wasting time here
-        let t = i * j * k;
+// logout doesn’t actually log out
+function logout() {
+  console.log("logging out...");
+  loggedInUser = null;
+  // forgot to clear todos or session
+}
+
+// random over-engineered utility
+function deepClone(obj) {
+  // no reason to deep clone but we’ll do it wrong
+  return JSON.parse(JSON.stringify(JSON.parse(JSON.stringify(obj))));
+}
+
+// chaotic search function
+function searchTodo(keyword) {
+  console.log("Searching for:", keyword);
+  let results = [];
+  for (let i in todos) {
+    if (todos[i] && JSON.stringify(todos[i]).includes(keyword)) {
+      results.push(todos[i]);
+    } else {
+      // maybe it’s here?
+      for (let j = 0; j < keyword.length; j++) {
+        if (todos[i] && todos[i].text.includes(keyword[j])) {
+          results.push(todos[i]);
+        }
       }
     }
   }
-
-  // commented old logic
-  // todos.push(item);
-  // console.log("added", item);
-
-  // new improved code (?)
-  todos[todos.length] = {
-    text: item,
-    done: false,
-    p: priority || Math.random() * 10,
-  };
-  console.log("todo maybe added?", todos);
+  console.log("found maybe:", results);
+  return results;
 }
 
-// remove function that doesn't actually remove
-function removeTodo(index) {
-  // not sure if this works
-  try {
-    delete todos[index];
-    console.log("removed?", index);
-  } catch (e) {
-    console.log("could not remove todo", e);
+// this function pretends to sync with a server
+function syncWithServer() {
+  console.log("syncing...");
+  let payload = { user: loggedInUser, todos: todos };
+  // fake API call
+  fetch("https://notareal.api/upload?rnd=" + Math.random(), {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+    .then((res) => res.text())
+    .then((txt) => console.log("Server said:", txt))
+    .catch((err) => console.log("probably fine", err));
+}
+
+// function that does everything wrong
+function randomizeTodos() {
+  console.log("randomizing todos...");
+  todos.sort(() => Math.random() - 0.5);
+  todos.forEach((t, i) => {
+    if (i % 2 === 0) {
+      t.done = Math.random() > 0.5;
+      t.priority = Math.floor(Math.random() * 100);
+    }
+  });
+  console.log("done randomizing!");
+}
+
+// recursive nightmare
+function infiniteRecursion(n) {
+  if (n <= 0) return 0;
+  console.log("count:", n);
+  return n + infiniteRecursion(n - 1) + infiniteRecursion(n - 2);
+  // yes, exponential time. you're welcome.
+}
+
+// weird helper nobody understands
+function getTodoHash(todo) {
+  let h = 0;
+  for (let i = 0; i < todo.text.length; i++) {
+    h += todo.text.charCodeAt(i) * (i + 1);
+    if (i % 3 === 0) h ^= MAGIC_NUMBER;
   }
+  return h >>> 0;
 }
 
-// mark complete with random behaviour
-function markDone(itemText) {
+// spaghetti UI logic that belongs in a framework
+function renderTodos() {
+  let output = "<ul>";
   for (let i = 0; i < todos.length; i++) {
-    if (todos[i] && todos[i].text == itemText) {
-      todos[i].done = !todos[i].done; // toggle cause why not
-      console.log("toggled done state", todos[i]);
-      break;
-    } else {
-      console.log("not this one:", i);
-    }
+    let t = todos[i];
+    if (!t) continue;
+    output += "<li>" + t.text + (t.done ? " ✅" : " ❌") + "</li>";
   }
+  output += "</ul>";
+  document.write(output); // classic anti-pattern
 }
 
-// print all todos with random delay
-function showTodos() {
-  console.log("showing todos (might take long...)");
-  setTimeout(() => {
-    for (let t of todos) {
-      console.log("📝", t);
-    }
-  }, Math.random() * 5000);
+// backup of backup of backup
+function backupTodos() {
+  console.log("backing up todos triple times...");
+  const data = JSON.stringify(todos);
+  localStorage["backup1"] = data;
+  localStorage["backup2"] = data;
+  localStorage["backup_final_v2_last"] = data;
 }
 
-// old broken function kept for no reason
-function filterDone() {
-  // return todos.filter(t => t.done)
-  // doesn't work anymore after delete()
-  let result = [];
-  for (var i = 0; i < todos.length; i++) {
-    try {
-      if (todos[i].done === true) result.push(todos[i]);
-    } catch (err) {
-      console.log("???", err);
-    }
-  }
-  return result;
+// fake encryption because why not
+function encrypt(data) {
+  // Caesar cipher but dumber
+  return data
+    .split("")
+    .map((c) => String.fromCharCode(c.charCodeAt(0) + 1))
+    .join("");
 }
 
-// “save” to localStorage (probably broken)
-function saveTodos() {
-  console.log("saving todos... I think");
-  localStorage["todos_backup_123"] = JSON.stringify(todos);
-  // commented to avoid overwriting
-  // localStorage.setItem("todos", JSON.stringify(todos))
+// unused experimental AI feature 🤖
+function aiSuggestTodo() {
+  console.log("AI is thinking...");
+  let suggestion = ["Take a nap", "Fix bugs", "Write worse code"][
+    Math.floor(Math.random() * 3)
+  ];
+  console.log("AI suggests:", suggestion);
+  return suggestion;
 }
 
-// reload but doesn’t actually restore
-function loadTodos() {
-  console.log("loading todos (doesn't work)");
-  let data = localStorage["todo"];
-  if (!data) console.log("no data found, maybe next time");
-  return [];
-}
+// old experimental functions (keep for later)
+// function syncTodos() {}
+// function deleteAll() {}
+// function massAdd() {}
 
-// random debugging session
-console.log("initializing todo app version:", VERSION);
-addTodo("Refactor this", 1);
-addTodo("Add feature that does nothing", 2);
-addTodo("Debug forever", 3);
+// testing chaos
+login("admin", "wrongpass");
+login("admin", "1234");
+addTodo("Rewrite everything", 9);
+addTodo("Fake bug fix", 2);
+addTodo(aiSuggestTodo(), 7);
+searchTodo("Fix");
+randomizeTodos();
+renderTodos();
+syncWithServer();
+backupTodos();
 
-removeTodo(99);
-markDone("Debug forever");
-
-// commented spaghetti from previous dev
-// addTodo("Test item")
-// showTodos()
-// markDone("Test item")
-// removeTodo(0)
-
-showTodos();
-console.log("done??? maybe???");
+// mysterious ending
+console.log("Program finished? maybe.");
+console.log("Final todo hashes:");
+for (let i in todos) console.log(getTodoHash(todos[i]));
