@@ -135,31 +135,30 @@ ${file.patch}
 
         const patchLines = file.patch.split("\n");
 
-        // Merge AI comments with actual line content
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
+
           const match = addedLines.find((l) => l.line === c.line);
           if (!match) continue;
-          // Get the index of the changed line in the patch
+
           const lineIndex = patchLines.findIndex((l) =>
             l.includes(match.code.trim())
           );
           if (lineIndex === -1) continue;
 
-          // Capture 4 lines above and 4 lines below for better context
-          const contextStart = Math.max(0, lineIndex - 3);
-          const contextEnd = Math.min(patchLines.length, lineIndex + 4);
-          const contextSnippet = patchLines
+          // Capture the full diff context (4 lines above + 4 below)
+          const contextStart = Math.max(0, lineIndex - 4);
+          const contextEnd = Math.min(patchLines.length, lineIndex + 5);
+          const diffSnippet = patchLines
             .slice(contextStart, contextEnd)
             .filter((l) => !l.startsWith("@@")) // remove hunk headers
             .join("\n");
 
-          const body = `\`\`\`js
-${contextSnippet.trim()}
-\`\`\`
-
-
-💡 **AI Review:** ${c.comment.trim()}`;
+          const body = `\`\`\`diff
+        ${diffSnippet.trim()}
+        \`\`\`
+        
+        💡 **AI Review:** ${c.comment.trim()}`;
 
           allComments.push({
             path: c.file || file.filename,
