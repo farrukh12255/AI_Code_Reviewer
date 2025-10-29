@@ -65,14 +65,14 @@ function extractChangedLines(patch) {
 
 // 🚀 Main review endpoint
 app.post("/review", async (req, res) => {
-  const { githubToken, openaiKey, owner, repo } = req.body;
+  const { githubToken, googleKey, owner, repo } = req.body;
 
-  if (!githubToken || !openaiKey || !owner || !repo) {
+  if (!githubToken || !googleKey || !repo || !owner) {
     return res.status(400).json({ error: "Missing required parameters" });
   }
 
   const octokit = new Octokit({ auth: githubToken });
-  const openai = new OpenAI({ apiKey: openaiKey });
+  const openai = new OpenAI({ apiKey: googleKey });
 
   try {
     // 🔍 Get latest open PR
