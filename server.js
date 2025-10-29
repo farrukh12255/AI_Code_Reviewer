@@ -129,6 +129,7 @@ ${file.patch}
 
         const content = response.choices[0].message.content;
         const aiComments = extractJSON(content);
+        console.log("aiComments: ", aiComments);
         const addedLines = extractAddedLines(file.patch);
         console.log("addedLines: ", addedLines);
 
