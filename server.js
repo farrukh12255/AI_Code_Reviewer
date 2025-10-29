@@ -3,21 +3,20 @@ import { Octokit } from "@octokit/rest";
 import OpenAI from "openai";
 import dotenv from "dotenv";
 import fs from "fs";
-import { execSync } from "child_process";
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
 
-// 🧩 Helper: Extract JSON safely from AI response
+// 🧩 Extract JSON safely from Gemini response
 function extractJSON(text) {
   const match = text.match(/\[\s*{[\s\S]*}\s*\]/);
   if (!match) throw new Error("No JSON found in AI response");
   return JSON.parse(match[0]);
 }
 
-// 🧩 Save and read last reviewed PR
+// 🧩 Save/retrieve last reviewed PR info
 function getLastReviewedSha() {
   try {
     return JSON.parse(fs.readFileSync(".last_pr_sha.json", "utf-8"));
@@ -25,7 +24,6 @@ function getLastReviewedSha() {
     return {};
   }
 }
-
 function saveLastReviewedSha(prNumber, commitSha) {
   fs.writeFileSync(
     ".last_pr_sha.json",
@@ -33,32 +31,39 @@ function saveLastReviewedSha(prNumber, commitSha) {
   );
 }
 
-// 🧩 Extract added lines from patch
+// 🧩 Extract changed (added/deleted) lines with exact line references
 function extractAddedLines(patch) {
   const added = [];
   const lines = patch.split("\n");
-  let lineNumber = 0;
+  let oldLine = 0;
+  let newLine = 0;
+
   for (const l of lines) {
     if (l.startsWith("@@")) {
-      const match = l.match(/\+(\d+)/);
-      lineNumber = match ? parseInt(match[1], 10) - 1 : lineNumber;
+      const match = l.match(/-(\d+),?\d*\s+\+(\d+)/);
+      if (match) {
+        oldLine = parseInt(match[1], 10) - 1;
+        newLine = parseInt(match[2], 10) - 1;
+      }
     } else if (l.startsWith("+") && !l.startsWith("+++")) {
-      lineNumber++;
-      added.push({ line: lineNumber, code: l.replace(/^\+/, "") });
-    } else if (!l.startsWith("-")) {
-      lineNumber++;
+      newLine++;
+      added.push({ line: newLine, code: l.replace(/^\+/, ""), raw: l });
+    } else if (l.startsWith("-") && !l.startsWith("---")) {
+      oldLine++;
+    } else {
+      oldLine++;
+      newLine++;
     }
   }
+
   return added;
 }
 
-// 🚀 API endpoint: /review
+// 🚀 Main review endpoint
 app.post("/review", async (req, res) => {
   const { githubToken, googleKey, owner, repo } = req.body;
-
-  if (!githubToken || !googleKey || !repo || !owner) {
+  if (!githubToken || !googleKey || !owner || !repo)
     return res.status(400).json({ error: "Missing required parameters" });
-  }
 
   const octokit = new Octokit({ auth: githubToken });
   const openai = new OpenAI({
@@ -67,7 +72,7 @@ app.post("/review", async (req, res) => {
   });
 
   try {
-    // 🔍 Get latest PR
+    // Get latest open PR
     const { data: prs } = await octokit.pulls.list({
       owner,
       repo,
@@ -76,18 +81,15 @@ app.post("/review", async (req, res) => {
       direction: "desc",
       per_page: 1,
     });
+
     if (!prs.length) throw new Error("No open pull requests found.");
-
     const pr = prs[0];
-    const latestRemoteSha = pr.head.sha;
+    const latestSha = pr.head.sha;
+
     const last = getLastReviewedSha();
-
-    if (last.prNumber === pr.number && last.commitSha === latestRemoteSha) {
-      console.log("🕒 PR already reviewed — skipping duplicate run.");
+    if (last.prNumber === pr.number && last.commitSha === latestSha)
       return res.json({ message: "PR already reviewed." });
-    }
 
-    // Get changed files
     const { data: files } = await octokit.pulls.listFiles({
       owner,
       repo,
@@ -96,86 +98,76 @@ app.post("/review", async (req, res) => {
 
     const allComments = [];
 
-    // Loop over changed files
+    // 🧠 Loop through changed files
     for (const file of files) {
       if (!file.patch) continue;
 
-      const reviewPrompt = `
-You are a strict code reviewer. Analyze ONLY the added lines in this patch.
+      console.log(`🧠 Reviewing file: ${file.filename}`);
 
+      const prompt = `
+You are a strict code reviewer.
+Analyze ONLY the added and deleted lines.
 Focus on:
-- Potential bugs or inefficiencies
-- Unnecessary console.log/debugger statements
+- Debug/console left in code
+- Poor variable names
+- Redundant logic
 - Async or missing error handling
-- Code smell or redundant logic
-- Try to use latest version of code implementaion
+- Potential bugs or bad patterns
 
-Output JSON only:
+Return JSON only:
 [
-  { "file": "${file.filename}", "line": 12, "comment": "Example issue" }
+  { "file": "${file.filename}", "line": 10, "comment": "Your suggestion" }
 ]
 
 Patch:
 ${file.patch}
 `;
 
-      console.log(`🧠 Analyzing ${file.filename}...`);
-
       try {
         const response = await openai.chat.completions.create({
           model: "gemini-2.0-flash",
-          messages: [{ role: "user", content: reviewPrompt }],
+          messages: [{ role: "user", content: prompt }],
         });
 
-        const content = response.choices[0].message.content;
-        const aiComments = extractJSON(content);
-        console.log("aiComments: ", aiComments);
+        const aiComments = extractJSON(response.choices[0].message.content);
         const addedLines = extractAddedLines(file.patch);
-        console.log("addedLines: ", addedLines);
+        const patchLines = file.patch.split("\n");
 
-        // const patchLines = file.patch.split("\n");
-
-        // Merge AI comments with actual line content and diff context
+        // Merge comments with diff context
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
-
           const match = addedLines.find((l) => l.line === c.line);
-          console.log("match: ", match);
           if (!match) continue;
 
-          // Build a diff-style preview around the changed lines
-          const patchLines = file.patch.split("\n");
-          console.log("patchLines: ", patchLines);
           const lineIndex = patchLines.findIndex((l) =>
             l.includes(match.code.trim())
           );
-
           if (lineIndex === -1) continue;
 
-          // Capture a few lines above and below
-          const contextBefore = patchLines.slice(
+          // Capture context: 4 lines before + after
+          const before = patchLines.slice(
             Math.max(0, lineIndex - 4),
             lineIndex
           );
-          const contextAfter = patchLines.slice(
+          const after = patchLines.slice(
             lineIndex + 1,
             Math.min(patchLines.length, lineIndex + 5)
           );
 
-          // Only show changed part (lines starting with '+' or '-')
+          // Focus on changed (+/-) lines
           const diffBlock = [
-            ...contextBefore.filter((l) => /^[\+\-]/.test(l)),
+            ...before.filter((l) => /^[\+\-]/.test(l)),
             patchLines[lineIndex],
-            ...contextAfter.filter((l) => /^[\+\-]/.test(l)),
+            ...after.filter((l) => /^[\+\-]/.test(l)),
           ].join("\n");
 
           const body = `
-  \`\`\`diff
-  ${diffBlock}
-  \`\`\`
-  
-  💡 **AI Review:** ${c.comment.trim()}
-  `;
+\`\`\`diff
+${diffBlock}
+\`\`\`
+
+💡 **AI Review:** ${c.comment.trim()}
+`;
 
           allComments.push({
             path: c.file || file.filename,
@@ -189,37 +181,35 @@ ${file.patch}
       }
     }
 
+    // 🟩 Post review
     if (!allComments.length) {
-      console.log("✅ No issues found — approving PR.");
       await octokit.pulls.createReview({
         owner,
         repo,
         pull_number: pr.number,
-        body: "🤖 AI Review: No issues found — PR looks clean!",
+        body: "🤖 AI Review: No issues found — PR looks good!",
         event: "APPROVE",
       });
-      saveLastReviewedSha(pr.number, latestRemoteSha);
-      return res.json({ message: "✅ PR approved — no issues found." });
+      saveLastReviewedSha(pr.number, latestSha);
+      return res.json({ message: "✅ No issues found." });
     }
 
-    console.log(`💬 Found ${allComments.length} issues — posting review...`);
+    console.log(`💬 Found ${allComments.length} issues — posting...`);
 
-    // Post all comments
     await octokit.pulls.createReview({
       owner,
       repo,
       pull_number: pr.number,
-      commit_id: latestRemoteSha,
-      body: "🤖 AI Review completed — see inline comments below.",
+      commit_id: latestSha,
+      body: "🤖 AI Review completed — see inline comments.",
       event: "COMMENT",
       comments: allComments,
     });
 
-    saveLastReviewedSha(pr.number, latestRemoteSha);
-    console.log("✅ Review completed successfully!");
+    saveLastReviewedSha(pr.number, latestSha);
     res.json({
-      message: "✅ AI review completed.",
-      totalComments: allComments.length,
+      message: "✅ AI Review completed.",
+      comments: allComments.length,
     });
   } catch (err) {
     console.error("❌ Error:", err.message);
@@ -227,6 +217,5 @@ ${file.patch}
   }
 });
 
-// 🧭 Start server
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🚀 AI Reviewer running on port ${PORT}`));
