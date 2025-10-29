@@ -33,6 +33,7 @@ function saveLastReviewedSha(prNumber, commitSha) {
 
 // 🧩 Extract changed (added/deleted) lines with exact line references
 // 🧩 Extract added line *blocks* for better context
+
 function extractAddedBlocks(patch) {
   const blocks = [];
   const lines = patch.split("\n");
@@ -89,9 +90,6 @@ app.post("/review", async (req, res) => {
     const pr = prs[0];
     const latestSha = pr.head.sha;
 
-    // Get bot (authenticated user)
-    const { data: botUser } = await octokit.rest.users.getAuthenticated();
-
     const last = getLastReviewedSha();
     if (last.prNumber === pr.number && last.commitSha === latestSha)
       return res.json({ message: "PR already reviewed." });
@@ -111,24 +109,23 @@ app.post("/review", async (req, res) => {
       console.log(`🧠 Reviewing file: ${file.filename}`);
 
       const prompt = `
-  You are a strict code reviewer.
-  Analyze ONLY the added and deleted lines.
-  Focus on:
-  - Debug/console left in code
-  - Poor variable names
-  - Redundant logic
-  - Async or missing error handling
-  - Potential bugs or bad patterns
-  - Try to follow good developer practice and use latest and stable code version practice and code format
-  
-  Return JSON only:
-  [
-    { "file": "${file.filename}", "line": 10, "comment": "Your suggestion" }
-  ]
-  
-  Patch:
-  ${file.patch}
-  `;
+You are a strict code reviewer.
+Analyze ONLY the added and deleted lines.
+Focus on:
+- Debug/console left in code
+- Poor variable names
+- Redundant logic
+- Async or missing error handling
+- Potential bugs or bad patterns
+
+Return JSON only:
+[
+  { "file": "${file.filename}", "line": 10, "comment": "Your suggestion" }
+]
+
+Patch:
+${file.patch}
+`;
 
       try {
         const response = await openai.chat.completions.create({
@@ -138,19 +135,42 @@ app.post("/review", async (req, res) => {
 
         const aiComments = extractJSON(response.choices[0].message.content);
         const addedBlocks = extractAddedBlocks(file.patch);
+        const patchLines = file.patch.split("\n");
 
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
-          const match = addedBlocks.find(
+
+          // Find which block this comment belongs to
+          const block = addedBlocks.find(
             (b) => c.line >= b.start && c.line <= b.end
           );
-          if (!match) continue;
+          if (!block) continue;
+
+          // Capture 4 changed lines before and after the block for richer context
+          const blockIndex = patchLines.findIndex((l) =>
+            l.includes(block.lines[0].trim())
+          );
+          const context = patchLines.slice(
+            Math.max(0, blockIndex - 4),
+            Math.min(patchLines.length, blockIndex + block.lines.length + 4)
+          );
+
+          // Show only diff lines (+/-)
+          const diffBlock = context.filter((l) => /^[\+\-]/.test(l)).join("\n");
+
+          const body = `
+        \`\`\`diff
+        ${diffBlock}
+        \`\`\`
+        
+        💡 **AI Review:** ${c.comment.trim()}
+        `;
 
           allComments.push({
             path: c.file || file.filename,
-            line: c.line,
+            line: block.start,
             side: "RIGHT",
-            body: `💡 **AI Review:** ${c.comment.trim()}`,
+            body,
           });
         }
       } catch (err) {
@@ -159,26 +179,16 @@ app.post("/review", async (req, res) => {
     }
 
     // 🟩 Post review
-    const isSelfPR = pr.user.login === botUser.login;
-
     if (!allComments.length) {
-      const message = "🤖 AI Review: No issues found — PR looks good!";
-
-      // If reviewing own PR → skip APPROVE
-      const reviewType = isSelfPR ? "COMMENT" : "APPROVE";
-
       await octokit.pulls.createReview({
         owner,
         repo,
         pull_number: pr.number,
-        body: message,
-        event: reviewType,
+        body: "🤖 AI Review: No issues found — PR looks good!",
+        event: "APPROVE",
       });
-
       saveLastReviewedSha(pr.number, latestSha);
-      return res.json({
-        message: `✅ No issues found. Review type: ${reviewType}`,
-      });
+      return res.json({ message: "✅ No issues found." });
     }
 
     console.log(`💬 Found ${allComments.length} issues — posting...`);
