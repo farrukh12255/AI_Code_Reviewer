@@ -133,17 +133,47 @@ ${file.patch}
         const addedLines = extractAddedLines(file.patch);
         console.log("addedLines: ", addedLines);
 
-        // Merge AI comments with actual line content
+        // const patchLines = file.patch.split("\n");
+
+        // Merge AI comments with actual line content and diff context
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
+
           const match = addedLines.find((l) => l.line === c.line);
           if (!match) continue;
 
-          const body = `\`\`\`js
-${match.code.trim()}
-\`\`\`
+          // Build a diff-style preview around the changed lines
+          const patchLines = file.patch.split("\n");
+          const lineIndex = patchLines.findIndex((l) =>
+            l.includes(match.code.trim())
+          );
 
-💡 **AI Review:** ${c.comment.trim()}`;
+          if (lineIndex === -1) continue;
+
+          // Capture a few lines above and below
+          const contextBefore = patchLines.slice(
+            Math.max(0, lineIndex - 4),
+            lineIndex
+          );
+          const contextAfter = patchLines.slice(
+            lineIndex + 1,
+            Math.min(patchLines.length, lineIndex + 5)
+          );
+
+          // Only show changed part (lines starting with '+' or '-')
+          const diffBlock = [
+            ...contextBefore.filter((l) => /^[\+\-]/.test(l)),
+            patchLines[lineIndex],
+            ...contextAfter.filter((l) => /^[\+\-]/.test(l)),
+          ].join("\n");
+
+          const body = `
+  \`\`\`diff
+  ${diffBlock}
+  \`\`\`
+  
+  💡 **AI Review:** ${c.comment.trim()}
+  `;
 
           allComments.push({
             path: c.file || file.filename,
