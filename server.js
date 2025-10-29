@@ -133,15 +133,31 @@ ${file.patch}
         const addedLines = extractAddedLines(file.patch);
         console.log("addedLines: ", addedLines);
 
+        const patchLines = file.patch.split("\n");
+
         // Merge AI comments with actual line content
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
           const match = addedLines.find((l) => l.line === c.line);
           if (!match) continue;
+          // Get the index of the changed line in the patch
+          const lineIndex = patchLines.findIndex((l) =>
+            l.includes(match.code.trim())
+          );
+          if (lineIndex === -1) continue;
+
+          // Capture 4 lines above and 4 lines below for better context
+          const contextStart = Math.max(0, lineIndex - 3);
+          const contextEnd = Math.min(patchLines.length, lineIndex + 4);
+          const contextSnippet = patchLines
+            .slice(contextStart, contextEnd)
+            .filter((l) => !l.startsWith("@@")) // remove hunk headers
+            .join("\n");
 
           const body = `\`\`\`js
-${match.code.trim()}
+${contextSnippet.trim()}
 \`\`\`
+
 
 💡 **AI Review:** ${c.comment.trim()}`;
 
