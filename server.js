@@ -94,7 +94,6 @@ app.post("/review", async (req, res) => {
     const latestSha = pr.head.sha;
     const last = getLastReviewedSha();
 
-    // 🕒 Skip duplicate reviews
     if (last.prNumber === pr.number && last.commitSha === latestSha) {
       console.log("⏸️ PR already reviewed — skipping duplicate run.");
       return res.json({ message: "PR already reviewed." });
@@ -120,35 +119,33 @@ app.post("/review", async (req, res) => {
       const { added, removed } = extractChangedLines(file.patch);
 
       const reviewPrompt = `
-You are a **strict senior code reviewer**.
-
-### Review Guidelines:
-- Focus on both added (right) and deleted (left) code.
-- If a deleted line looks important, ask “Why was this removed?”
-- For added code:
-  - Disallow console.log, debugger, or commented-out code.
-  - Check for unclear variable names.
-  - Check missing async/await or try/catch.
-  - Flag unused variables or functions.
-  - Enforce good naming (camelCase, PascalCase).
-  - Ensure modern and optimized implementation.
-- Comment **only where necessary**, not on unchanged lines.
-
-### Output strictly JSON:
-[
-  { "file": "filename.js", "line": 123, "comment": "Issue description" }
-]
-
-Patch:
-${file.patch}
-`;
+  You are a **strict senior code reviewer**.
+  
+  ### Rules:
+  - Focus on newly added (right side) and deleted (left side) code.
+  - If a deleted line seems important, ask: “Why was this removed?”
+  - Disallow:
+    - console.log, debugger, or commented-out code.
+    - Bad variable names (like a, data1, tmp, testVar).
+    - Functions without error handling or try/catch.
+    - Unused variables or unclear logic.
+  - Only comment when there’s a clear issue.
+  - Do NOT generate markdown explanations — only JSON.
+  
+  ### Output (strict JSON):
+  [
+    { "file": "filename.js", "line": 123, "comment": "Issue description" }
+  ]
+  
+  Patch:
+  ${file.patch}
+  `;
 
       console.log(`🧠 Reviewing file: ${file.filename}...`);
 
       try {
-        // 🔍 Call Gemini (via OpenAI wrapper)
         const response = await openai.chat.completions.create({
-          model: "gemini-2.0-flash", // Gemini model via Google API
+          model: "gemini-2.0-flash",
           messages: [{ role: "user", content: reviewPrompt }],
           temperature: 0.2,
         });
@@ -166,9 +163,9 @@ ${file.patch}
 
           const side = added.includes(target) ? "RIGHT" : "LEFT";
           const body = `\`\`\`js
-${target.code.trim()}
-\`\`\`
-💡 **AI Review:** ${c.comment.trim()}`;
+  ${target.code.trim()}
+  \`\`\`
+  💡 **AI Review:** ${c.comment.trim()}`;
 
           allComments.push({
             path: c.file || file.filename,
@@ -184,47 +181,52 @@ ${target.code.trim()}
 
     /* 5️⃣ Post comments or approval */
     if (allComments.length === 0) {
-      // 🟢 If no issues found and reviewer ≠ PR author → approve
-      if (!isSelfReview) {
-        await octokit.pulls.createReview({
-          owner,
-          repo,
-          pull_number: pr.number,
-          body: "🤖 AI Review: No issues found — looks great!",
-          event: "APPROVE",
-        });
-        console.log("✅ PR approved successfully!");
-      } else {
-        // 🟡 If self-review → just comment (cannot approve own PR)
-        await octokit.pulls.createReview({
-          owner,
-          repo,
-          pull_number: pr.number,
-          body: "🤖 AI Review: No issues found. (Skipped approval — self-review)",
-          event: "COMMENT",
-        });
-        console.log("🗨️ Self-review: Commented instead of approving.");
-      }
+      const message = isSelfReview
+        ? "🤖 AI Review: No issues found. (Skipped approval — self-review)"
+        : "🤖 AI Review: No issues found — looks great!";
+
+      await octokit.pulls.createReview({
+        owner,
+        repo,
+        pull_number: pr.number,
+        body: message,
+        event: isSelfReview ? "COMMENT" : "APPROVE",
+      });
 
       saveLastReviewedSha(pr.number, latestSha);
-      return res.json({
-        message: isSelfReview
-          ? "🗨️ Self-review done — comment only."
-          : "✅ PR approved — clean code!",
-      });
+      console.log("✅ No issues found, review completed.");
+      return res.json({ message });
     }
 
-    // 📝 If there are issues, always comment
+    // ✅ Fixed posting logic (prevents “invalid diff hunk”)
     console.log(`💬 Found ${allComments.length} issues — posting review...`);
-    await octokit.pulls.createReview({
-      owner,
-      repo,
-      pull_number: pr.number,
-      commit_id: latestSha,
-      body: "🤖 **Strict AI Review Completed** — see inline comments below.",
-      event: "COMMENT",
-      comments: allComments,
-    });
+    const commentsPayload = allComments.map((c) => ({
+      path: c.path,
+      position: c.line || 1, // GitHub uses diff position, not line number
+      body: c.body,
+    }));
+
+    const validComments = commentsPayload.filter((c) => c.position);
+    if (validComments.length === 0) {
+      console.warn("⚠️ No valid diff positions found, posting summary only.");
+      await octokit.pulls.createReview({
+        owner,
+        repo,
+        pull_number: pr.number,
+        body: "🤖 AI Review found potential issues, but couldn’t locate exact diff positions. Please check manually.",
+        event: "COMMENT",
+      });
+    } else {
+      await octokit.pulls.createReview({
+        owner,
+        repo,
+        pull_number: pr.number,
+        commit_id: latestSha,
+        body: "🤖 **Strict AI Review Completed** — see inline comments below.",
+        event: "COMMENT",
+        comments: validComments,
+      });
+    }
 
     saveLastReviewedSha(pr.number, latestSha);
     console.log("✅ Review posted successfully!");
