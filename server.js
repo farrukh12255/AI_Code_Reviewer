@@ -43,7 +43,7 @@ function extractAddedBlocks(patch) {
   for (const l of lines) {
     if (l.startsWith("@@")) {
       const match = l.match(/\+(\d+)/);
-      newLine = match ? parseInt(match[1], 10) - 1 + 4 : newLine + 4;
+      newLine = match ? parseInt(match[1], 10) - 1 : newLine;
     } else if (l.startsWith("+") && !l.startsWith("+++")) {
       newLine++;
       if (!currentBlock) {
@@ -76,7 +76,7 @@ app.post("/review", async (req, res) => {
   });
 
   try {
-    // Get latest open PR
+    // 🧩 Get latest open PR
     const { data: prs } = await octokit.pulls.list({
       owner,
       repo,
@@ -90,10 +90,12 @@ app.post("/review", async (req, res) => {
     const pr = prs[0];
     const latestSha = pr.head.sha;
 
+    // 🧩 Check if PR already reviewed
     const last = getLastReviewedSha();
     if (last.prNumber === pr.number && last.commitSha === latestSha)
       return res.json({ message: "PR already reviewed." });
 
+    // 🧩 Get changed files in PR
     const { data: files } = await octokit.pulls.listFiles({
       owner,
       repo,
@@ -109,25 +111,26 @@ app.post("/review", async (req, res) => {
       console.log(`🧠 Reviewing file: ${file.filename}`);
 
       const prompt = `
-You are a strict code reviewer.
-Analyze ONLY the added and deleted lines.
-Focus on:
-- Debug/console left in code
-- Poor variable names
-- Redundant logic
-- Async or missing error handling
-- Potential bugs or bad patterns
-
-Return JSON only:
-[
-  { "file": "${file.filename}", "line": 10, "comment": "Your suggestion" }
-]
-
-Patch:
-${file.patch}
-`;
+  You are a strict code reviewer.
+  Analyze ONLY the added and deleted lines.
+  Focus on:
+  - Debug/console left in code
+  - Poor variable names
+  - Redundant logic
+  - Async or missing error handling
+  - Potential bugs or bad patterns
+  
+  Return JSON only:
+  [
+    { "file": "${file.filename}", "line": 10, "comment": "Your suggestion" }
+  ]
+  
+  Patch:
+  ${file.patch}
+  `;
 
       try {
+        // 🧠 Ask AI to review the patch
         const response = await openai.chat.completions.create({
           model: "gemini-2.0-flash",
           messages: [{ role: "user", content: prompt }],
@@ -140,31 +143,43 @@ ${file.patch}
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
 
-          // Find which block this comment belongs to
+          // Find block that matches this comment
           const block = addedBlocks.find(
             (b) => c.line >= b.start && c.line <= b.end
           );
           if (!block) continue;
 
-          // Capture 4 changed lines before and after the block for richer context
-          const blockIndex = patchLines.findIndex((l) =>
-            l.includes(block.lines[0].trim())
-          );
-          const context = patchLines.slice(
-            Math.max(0, blockIndex - 4),
-            Math.min(patchLines.length, blockIndex + block.lines.length + 4)
+          // 🧠 Capture all relevant changed lines (fix console.log missing issue)
+          const blockStartIndex = patchLines.findIndex(
+            (l) =>
+              l.trim().startsWith("+") &&
+              l.replace(/^\+/, "").trim() === block.lines[0].trim()
           );
 
-          // Show only diff lines (+/-)
+          const blockEndIndex = patchLines.findLastIndex(
+            (l) =>
+              l.trim().startsWith("+") &&
+              block.lines.some(
+                (line) => l.replace(/^\+/, "").trim() === line.trim()
+              )
+          );
+
+          const startIndex = Math.max(0, blockStartIndex - 4);
+          const endIndex = Math.min(patchLines.length, blockEndIndex + 5);
+
+          const context = patchLines.slice(startIndex, endIndex);
+
+          // Only include +/- lines for diff clarity
           const diffBlock = context.filter((l) => /^[\+\-]/.test(l)).join("\n");
 
+          // 🧩 Build the comment body
           const body = `
-        \`\`\`diff
-        ${diffBlock}
-        \`\`\`
-        
-        💡 **AI Review:** ${c.comment.trim()}
-        `;
+  \`\`\`diff
+  ${diffBlock}
+  \`\`\`
+  
+  💡 **AI Review:** ${c.comment.trim()}
+  `;
 
           allComments.push({
             path: c.file || file.filename,
@@ -178,7 +193,7 @@ ${file.patch}
       }
     }
 
-    // 🟩 Post review
+    // 🟩 Post the review
     if (!allComments.length) {
       await octokit.pulls.createReview({
         owner,
