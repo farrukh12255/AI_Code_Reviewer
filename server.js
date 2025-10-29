@@ -137,40 +137,18 @@ ${file.patch}
         const addedBlocks = extractAddedBlocks(file.patch);
         const patchLines = file.patch.split("\n");
 
+        // 🧠 Post clean inline comment without code snippet
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
+          const match = addedLines.find((l) => l.line === c.line);
+          if (!match) continue;
 
-          // Find which block this comment belongs to
-          const block = addedBlocks.find(
-            (b) => c.line >= b.start && c.line <= b.end
-          );
-          if (!block) continue;
-
-          // Capture 4 changed lines before and after the block for richer context
-          const blockIndex = patchLines.findIndex((l) =>
-            l.includes(block.lines[0].trim())
-          );
-          const context = patchLines.slice(
-            Math.max(0, blockIndex - 4),
-            Math.min(patchLines.length, blockIndex + block.lines.length + 4)
-          );
-
-          // Show only diff lines (+/-)
-          const diffBlock = context.filter((l) => /^[\+\-]/.test(l)).join("\n");
-
-          const body = `
-          \`\`\`diff
-          ${diffBlock}
-          \`\`\`
-          
-          💡 **AI Review:** ${c.comment.trim()}
-          `;
-
+          // Direct inline comment — no code block or snippet
           allComments.push({
             path: c.file || file.filename,
-            line: block.start,
+            line: match.line,
             side: "RIGHT",
-            body,
+            body: `💡 **AI Review:** ${c.comment.trim()}`,
           });
         }
       } catch (err) {
