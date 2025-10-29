@@ -36,6 +36,7 @@ function saveLastReviewedSha(prNumber, commitSha) {
 
 function extractAddedBlocks(patch) {
   const blocks = [];
+  console.log("blocks: ", blocks);
   const lines = patch.split("\n");
   let newLine = 0;
   let currentBlock = null;
@@ -59,6 +60,7 @@ function extractAddedBlocks(patch) {
     }
   }
 
+  console.log("currentBlock: ", currentBlock);
   if (currentBlock) blocks.push(currentBlock);
   return blocks;
 }
