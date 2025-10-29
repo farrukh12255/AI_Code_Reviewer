@@ -43,7 +43,7 @@ function extractAddedBlocks(patch) {
   for (const l of lines) {
     if (l.startsWith("@@")) {
       const match = l.match(/\+(\d+)/);
-      newLine = match ? parseInt(match[1], 10) - 1 : newLine;
+      newLine = match ? parseInt(match[1], 10) - 1 + 4 : newLine + 4;
     } else if (l.startsWith("+") && !l.startsWith("+++")) {
       newLine++;
       if (!currentBlock) {
