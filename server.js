@@ -1,6 +1,6 @@
 import express from "express";
 import { Octokit } from "@octokit/rest";
-import OpenAI from "openai";
+import OpenAI from "openai"; // still used as Gemini wrapper
 import dotenv from "dotenv";
 import fs from "fs";
 
@@ -9,14 +9,14 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// 🧠 Utility: Safe JSON extraction from AI
+/* 🧠 Utility: Extract JSON safely from AI response */
 function extractJSON(text) {
   const match = text.match(/\[\s*{[\s\S]*}\s*\]/);
   if (!match) throw new Error("No JSON found in AI response");
   return JSON.parse(match[0]);
 }
 
-// 🧩 Save/retrieve last reviewed SHA
+/* 💾 Manage last reviewed PR commit */
 function getLastReviewedSha() {
   try {
     return JSON.parse(fs.readFileSync(".last_pr_sha.json", "utf-8"));
@@ -31,12 +31,11 @@ function saveLastReviewedSha(prNumber, commitSha) {
   );
 }
 
-// 🧩 Extract changed lines from patch
+/* 🧩 Extract added/removed lines from patch */
 function extractChangedLines(patch) {
   const added = [];
   const removed = [];
   const lines = patch.split("\n");
-
   let currentLine = 0;
   let inHunk = false;
 
@@ -60,22 +59,27 @@ function extractChangedLines(patch) {
       currentLine++;
     }
   }
+
   return { added, removed };
 }
 
-// 🚀 Main review endpoint
+/* 🚀 Endpoint: POST /review */
 app.post("/review", async (req, res) => {
   const { githubToken, googleKey, owner, repo } = req.body;
 
-  if (!githubToken || !googleKey || !repo || !owner) {
+  if (!githubToken || !googleKey || !owner || !repo) {
     return res.status(400).json({ error: "Missing required parameters" });
   }
 
+  // 🔑 Initialize clients
   const octokit = new Octokit({ auth: githubToken });
-  const openai = new OpenAI({ apiKey: googleKey });
+  const openai = new OpenAI({
+    apiKey: googleKey,
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+  });
 
   try {
-    // 🔍 Get latest open PR
+    /* 1️⃣ Get latest open PR */
     const { data: prs } = await octokit.pulls.list({
       owner,
       repo,
@@ -90,11 +94,17 @@ app.post("/review", async (req, res) => {
     const latestSha = pr.head.sha;
     const last = getLastReviewedSha();
 
+    // 🕒 Skip duplicate reviews
     if (last.prNumber === pr.number && last.commitSha === latestSha) {
       console.log("⏸️ PR already reviewed — skipping duplicate run.");
       return res.json({ message: "PR already reviewed." });
     }
 
+    /* 2️⃣ Identify if reviewer == PR author */
+    const { data: me } = await octokit.rest.users.getAuthenticated();
+    const isSelfReview = pr.user.login === me.login;
+
+    /* 3️⃣ Collect changed files */
     const { data: files } = await octokit.pulls.listFiles({
       owner,
       repo,
@@ -103,6 +113,7 @@ app.post("/review", async (req, res) => {
 
     const allComments = [];
 
+    /* 4️⃣ Analyze each changed file */
     for (const file of files) {
       if (!file.patch) continue;
 
@@ -112,30 +123,32 @@ app.post("/review", async (req, res) => {
 You are a **strict senior code reviewer**.
 
 ### Review Guidelines:
-- Focus on new (right) and deleted (left) lines.
-- If deleted code seems useful or functional, ask: “Why was this removed?”
-- For added lines:
-  - Ban: console.log, debugger, alert, commented-out code
-  - Flag unclear variable/function names
-  - Check for missing async/await or try/catch
-  - Flag security risks or unused variables
-  - Check naming conventions (camelCase, PascalCase)
-- Comment precisely on the changed line.
+- Focus on both added (right) and deleted (left) code.
+- If a deleted line looks important, ask “Why was this removed?”
+- For added code:
+  - Disallow console.log, debugger, or commented-out code.
+  - Check for unclear variable names.
+  - Check missing async/await or try/catch.
+  - Flag unused variables or functions.
+  - Enforce good naming (camelCase, PascalCase).
+  - Ensure modern and optimized implementation.
+- Comment **only where necessary**, not on unchanged lines.
 
-### Output strictly JSON array:
+### Output strictly JSON:
 [
   { "file": "filename.js", "line": 123, "comment": "Issue description" }
 ]
 
-Here’s the patch:
+Patch:
 ${file.patch}
 `;
 
-      console.log(`🔍 Reviewing ${file.filename}...`);
+      console.log(`🧠 Reviewing file: ${file.filename}...`);
 
       try {
+        // 🔍 Call Gemini (via OpenAI wrapper)
         const response = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
+          model: "gemini-2.0-flash", // Gemini model via Google API
           messages: [{ role: "user", content: reviewPrompt }],
           temperature: 0.2,
         });
@@ -143,13 +156,15 @@ ${file.patch}
         const content = response.choices[0].message.content;
         const aiComments = extractJSON(content);
 
-        // match comments to actual added lines
         for (const c of aiComments) {
+          if (!c.comment || c.comment.length < 3) continue;
+
           const target =
             added.find((l) => l.line === c.line) ||
             removed.find((l) => l.line === c.line);
-          if (!c.comment || !target) continue;
+          if (!target) continue;
 
+          const side = added.includes(target) ? "RIGHT" : "LEFT";
           const body = `\`\`\`js
 ${target.code.trim()}
 \`\`\`
@@ -158,7 +173,7 @@ ${target.code.trim()}
           allComments.push({
             path: c.file || file.filename,
             line: target.line,
-            side: added.includes(target) ? "RIGHT" : "LEFT",
+            side,
             body,
           });
         }
@@ -167,20 +182,40 @@ ${target.code.trim()}
       }
     }
 
-    // ✅ Post review
+    /* 5️⃣ Post comments or approval */
     if (allComments.length === 0) {
-      await octokit.pulls.createReview({
-        owner,
-        repo,
-        pull_number: pr.number,
-        body: "🤖 AI Review: No issues found — looks great!",
-        event: "APPROVE",
-      });
+      // 🟢 If no issues found and reviewer ≠ PR author → approve
+      if (!isSelfReview) {
+        await octokit.pulls.createReview({
+          owner,
+          repo,
+          pull_number: pr.number,
+          body: "🤖 AI Review: No issues found — looks great!",
+          event: "APPROVE",
+        });
+        console.log("✅ PR approved successfully!");
+      } else {
+        // 🟡 If self-review → just comment (cannot approve own PR)
+        await octokit.pulls.createReview({
+          owner,
+          repo,
+          pull_number: pr.number,
+          body: "🤖 AI Review: No issues found. (Skipped approval — self-review)",
+          event: "COMMENT",
+        });
+        console.log("🗨️ Self-review: Commented instead of approving.");
+      }
+
       saveLastReviewedSha(pr.number, latestSha);
-      return res.json({ message: "✅ PR approved — clean code!" });
+      return res.json({
+        message: isSelfReview
+          ? "🗨️ Self-review done — comment only."
+          : "✅ PR approved — clean code!",
+      });
     }
 
-    console.log(`💬 Posting ${allComments.length} comments...`);
+    // 📝 If there are issues, always comment
+    console.log(`💬 Found ${allComments.length} issues — posting review...`);
     await octokit.pulls.createReview({
       owner,
       repo,
@@ -194,7 +229,7 @@ ${target.code.trim()}
     saveLastReviewedSha(pr.number, latestSha);
     console.log("✅ Review posted successfully!");
     res.json({
-      message: "✅ Review completed.",
+      message: "✅ Review completed with comments.",
       totalComments: allComments.length,
     });
   } catch (err) {
@@ -203,7 +238,8 @@ ${target.code.trim()}
   }
 });
 
+/* 🧭 Start server */
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () =>
-  console.log(`🚀 AI Reviewer (Strict Mode) running on port ${PORT}`)
+  console.log(`🚀 AI Reviewer (Gemini + Strict Mode) running on port ${PORT}`)
 );
