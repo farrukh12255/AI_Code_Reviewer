@@ -60,6 +60,7 @@ function extractAddedBlocks(patch) {
     }
   }
 
+  console.log("currentBlock: ", currentBlock);
   if (currentBlock) blocks.push(currentBlock);
   return blocks;
 }
