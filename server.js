@@ -32,31 +32,34 @@ function saveLastReviewedSha(prNumber, commitSha) {
 }
 
 // 🧩 Extract changed (added/deleted) lines with exact line references
-function extractAddedLines(patch) {
-  const added = [];
+// 🧩 Extract added line *blocks* for better context
+function extractAddedBlocks(patch) {
+  const blocks = [];
   const lines = patch.split("\n");
-  let oldLine = 0;
   let newLine = 0;
+  let currentBlock = null;
 
   for (const l of lines) {
     if (l.startsWith("@@")) {
-      const match = l.match(/-(\d+),?\d*\s+\+(\d+)/);
-      if (match) {
-        oldLine = parseInt(match[1], 10) - 1;
-        newLine = parseInt(match[2], 10) - 1;
-      }
+      const match = l.match(/\+(\d+)/);
+      newLine = match ? parseInt(match[1], 10) - 1 : newLine;
     } else if (l.startsWith("+") && !l.startsWith("+++")) {
       newLine++;
-      added.push({ line: newLine, code: l.replace(/^\+/, ""), raw: l });
-    } else if (l.startsWith("-") && !l.startsWith("---")) {
-      oldLine++;
+      if (!currentBlock) {
+        currentBlock = { start: newLine, lines: [] };
+      }
+      currentBlock.lines.push(l.replace(/^\+/, ""));
     } else {
-      oldLine++;
-      newLine++;
+      if (currentBlock) {
+        blocks.push({ ...currentBlock, end: newLine });
+        currentBlock = null;
+      }
+      if (!l.startsWith("-")) newLine++;
     }
   }
 
-  return added;
+  if (currentBlock) blocks.push(currentBlock);
+  return blocks;
 }
 
 // 🚀 Main review endpoint
@@ -113,6 +116,7 @@ Focus on:
 - Redundant logic
 - Async or missing error handling
 - Potential bugs or bad patterns
+- Try to use latest and stable code version practice and code format
 
 Return JSON only:
 [
@@ -130,48 +134,41 @@ ${file.patch}
         });
 
         const aiComments = extractJSON(response.choices[0].message.content);
-        const addedLines = extractAddedLines(file.patch);
+        const addedBlocks = extractAddedBlocks(file.patch);
         const patchLines = file.patch.split("\n");
 
-        // Merge comments with diff context
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
-          const match = addedLines.find((l) => l.line === c.line);
-          if (!match) continue;
 
-          const lineIndex = patchLines.findIndex((l) =>
-            l.includes(match.code.trim())
+          // Find which block this comment belongs to
+          const block = addedBlocks.find(
+            (b) => c.line >= b.start && c.line <= b.end
           );
-          if (lineIndex === -1) continue;
+          if (!block) continue;
 
-          // Capture context: 4 lines before + after
-          const before = patchLines.slice(
-            Math.max(0, lineIndex - 4),
-            lineIndex
+          // Capture 4 changed lines before and after the block for richer context
+          const blockIndex = patchLines.findIndex((l) =>
+            l.includes(block.lines[0].trim())
           );
-          const after = patchLines.slice(
-            lineIndex + 1,
-            Math.min(patchLines.length, lineIndex + 5)
+          const context = patchLines.slice(
+            Math.max(0, blockIndex - 4),
+            Math.min(patchLines.length, blockIndex + block.lines.length + 4)
           );
 
-          // Focus on changed (+/-) lines
-          const diffBlock = [
-            ...before.filter((l) => /^[\+\-]/.test(l)),
-            patchLines[lineIndex],
-            ...after.filter((l) => /^[\+\-]/.test(l)),
-          ].join("\n");
+          // Show only diff lines (+/-)
+          const diffBlock = context.filter((l) => /^[\+\-]/.test(l)).join("\n");
 
           const body = `
-\`\`\`diff
-${diffBlock}
-\`\`\`
-
-💡 **AI Review:** ${c.comment.trim()}
-`;
+          \`\`\`diff
+          ${diffBlock}
+          \`\`\`
+          
+          💡 **AI Review:** ${c.comment.trim()}
+          `;
 
           allComments.push({
             path: c.file || file.filename,
-            line: match.line,
+            line: block.start,
             side: "RIGHT",
             body,
           });
