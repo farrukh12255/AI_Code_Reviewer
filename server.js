@@ -140,10 +140,12 @@ ${file.patch}
           if (!c.comment || c.comment.length < 5) continue;
 
           const match = addedLines.find((l) => l.line === c.line);
+          console.log("match: ", match);
           if (!match) continue;
 
           // Build a diff-style preview around the changed lines
           const patchLines = file.patch.split("\n");
+          console.log("patchLines: ", patchLines);
           const lineIndex = patchLines.findIndex((l) =>
             l.includes(match.code.trim())
           );
