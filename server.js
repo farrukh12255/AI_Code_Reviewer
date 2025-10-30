@@ -133,25 +133,23 @@ app.post("/review", async (req, res) => {
       console.log(`🧠 Reviewing file: ${file.filename}`);
 
       const prompt = `
-You are a strict code reviewer.
-Analyze ONLY the added and deleted lines.
-Focus on:
-- Debug/console left in code
-- Poor variable names
-- Redundant logic
-- Missing error handling
-- Potential bugs or bad async logic
-
-Return JSON only:
-[
-  { "file": "${file.filename}", "line": <EXACT added line number from patch>, "comment": "Your suggestion" }
-]
-
-Make sure the "line" corresponds exactly to the "+" line number in the patch.
-
-Patch:
-${file.patch}
-`;
+      You are a professional code reviewer analyzing a GitHub pull request diff.
+      
+      Rules:
+      - Focus only on the ADDED (right-hand side) lines of code — ignore removed ones.
+      - If you notice that some code was REMOVED without replacement or improvement, ask: 
+        "Why was this code removed? It seems necessary or has no alternative added."
+      - Point out logic gaps, missing error handling, potential bugs, or removed validations.
+      - Avoid trivial comments (e.g., formatting, naming unless confusing).
+      
+      Respond strictly in JSON:
+      [
+        { "file": "${file.filename}", "line": <EXACT added or removed line number>, "comment": "Your feedback or question" }
+      ]
+      
+      Patch:
+      ${file.patch}
+      `;
 
       try {
         const response = await openai.chat.completions.create({
