@@ -36,8 +36,8 @@ function saveLastReviewedSha(prNumber, commitSha) {
 
 function extractAddedBlocks(patch) {
   const blocks = [];
-  console.log("blocks: ", blocks);
   const lines = patch.split("\n");
+  console.log("lines: ", lines);
   let newLine = 0;
   let currentBlock = null;
 
@@ -57,10 +57,10 @@ function extractAddedBlocks(patch) {
         currentBlock = null;
       }
       if (!l.startsWith("-")) newLine++;
+      console.log("newLine: ", newLine);
     }
   }
 
-  console.log("currentBlock: ", currentBlock);
   if (currentBlock) blocks.push(currentBlock);
   return blocks;
 }
@@ -78,7 +78,7 @@ app.post("/review", async (req, res) => {
   });
 
   try {
-    // 🧩 Get latest open PR
+    // Get latest open PR
     const { data: prs } = await octokit.pulls.list({
       owner,
       repo,
@@ -92,12 +92,10 @@ app.post("/review", async (req, res) => {
     const pr = prs[0];
     const latestSha = pr.head.sha;
 
-    // 🧩 Check if PR already reviewed
     const last = getLastReviewedSha();
-    if (last.prNumber === pr.number && last.commitSha === latestSha)
-      return res.json({ message: "PR already reviewed." });
+    // if (last.prNumber === pr.number && last.commitSha === latestSha)
+    //   return res.json({ message: "PR already reviewed." });
 
-    // 🧩 Get changed files in PR
     const { data: files } = await octokit.pulls.listFiles({
       owner,
       repo,
@@ -113,26 +111,30 @@ app.post("/review", async (req, res) => {
       console.log(`🧠 Reviewing file: ${file.filename}`);
 
       const prompt = `
-  You are a strict code reviewer.
-  Analyze ONLY the added and deleted lines.
-  Focus on:
-  - Debug/console left in code
-  - Poor variable names
-  - Redundant logic
-  - Async or missing error handling
-  - Potential bugs or bad patterns
-  
-  Return JSON only:
-  [
-    { "file": "${file.filename}", "line": 10, "comment": "Your suggestion" }
-  ]
-  
-  Patch:
-  ${file.patch}
-  `;
+You are a strict code reviewer.
+Analyze ONLY the added and deleted lines.
+Focus on:
+- Debug/console left in code
+- Poor variable names
+- Redundant logic
+- Async or missing error handling
+- Potential bugs or bad patterns
+
+Return JSON only:
+[
+  { "file": "${file.filename}", "line": <EXACT added line number from patch>, "comment": "Your suggestion" }
+]
+
+Make sure the "line" corresponds exactly to the "+" line number in the patch.
+for example you selecting line from 40 to 45 and in this line between coming any issue
+that means you are covering the line of code where issue exists e.g console.log, debugger, and any issue comes
+so that dev can understand easily.
+
+Patch:
+${file.patch}
+`;
 
       try {
-        // 🧠 Ask AI to review the patch
         const response = await openai.chat.completions.create({
           model: "gemini-2.0-flash",
           messages: [{ role: "user", content: prompt }],
@@ -145,47 +147,36 @@ app.post("/review", async (req, res) => {
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
 
-          // Find block that matches this comment
+          // Find which block this comment belongs to
           const block = addedBlocks.find(
             (b) => c.line >= b.start && c.line <= b.end
           );
+          console.log("block: ", block);
           if (!block) continue;
 
-          // 🧠 Capture all relevant changed lines (fix console.log missing issue)
-          const blockStartIndex = patchLines.findIndex(
-            (l) =>
-              l.trim().startsWith("+") &&
-              l.replace(/^\+/, "").trim() === block.lines[0].trim()
+          // Capture 4 changed lines before and after the block for richer context
+          const blockIndex = patchLines.findIndex((l) =>
+            l.includes(block.lines[0].trim())
+          );
+          const context = patchLines.slice(
+            Math.max(0, blockIndex - 4),
+            Math.min(patchLines.length, blockIndex + block.lines.length + 4)
           );
 
-          const blockEndIndex = patchLines.findLastIndex(
-            (l) =>
-              l.trim().startsWith("+") &&
-              block.lines.some(
-                (line) => l.replace(/^\+/, "").trim() === line.trim()
-              )
-          );
-
-          const startIndex = Math.max(0, blockStartIndex - 4);
-          const endIndex = Math.min(patchLines.length, blockEndIndex + 5);
-
-          const context = patchLines.slice(startIndex, endIndex);
-
-          // Only include +/- lines for diff clarity
+          // Show only diff lines (+/-)
           const diffBlock = context.filter((l) => /^[\+\-]/.test(l)).join("\n");
 
-          // 🧩 Build the comment body
           const body = `
-  \`\`\`diff
-  ${diffBlock}
-  \`\`\`
-  
-  💡 **AI Review:** ${c.comment.trim()}
-  `;
-
+        \`\`\`diff
+        ${diffBlock}
+        \`\`\`
+        
+        💡 **AI Review:** ${c.comment.trim()}
+        `;
+          console.log("-----", block.start + 5);
           allComments.push({
             path: c.file || file.filename,
-            line: block.start - 5,
+            line: block.start,
             side: "RIGHT",
             body,
           });
@@ -195,7 +186,7 @@ app.post("/review", async (req, res) => {
       }
     }
 
-    // 🟩 Post the review
+    // 🟩 Post review
     if (!allComments.length) {
       await octokit.pulls.createReview({
         owner,
