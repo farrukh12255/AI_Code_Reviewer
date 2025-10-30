@@ -9,7 +9,7 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// 🧩 Extract JSON safely from Gemini response
+// 🧩 Extract JSON safely from AI response
 function extractJSON(text) {
   const match = text.match(/\[\s*{[\s\S]*}\s*\]/);
   if (!match) throw new Error("No JSON found in AI response");
@@ -24,6 +24,7 @@ function getLastReviewedSha() {
     return {};
   }
 }
+
 function saveLastReviewedSha(prNumber, commitSha) {
   fs.writeFileSync(
     ".last_pr_sha.json",
@@ -31,7 +32,7 @@ function saveLastReviewedSha(prNumber, commitSha) {
   );
 }
 
-// 🧩 Extract added line blocks + line numbers
+// 🧩 Extract added lines and line numbers
 function extractAddedBlocks(patch) {
   const blocks = [];
   const lines = patch.split("\n");
@@ -57,36 +58,19 @@ function extractAddedBlocks(patch) {
       if (!l.startsWith("-")) newLine++;
     }
   }
+
   if (currentBlock) blocks.push(currentBlock);
   return blocks;
 }
 
-// 🧩 Map AI line number to diff position
-function findDiffLinePosition(patch, targetLine) {
-  const lines = patch.split("\n");
-  let newLine = 0;
-
-  for (const l of lines) {
-    if (l.startsWith("@@")) {
-      const match = l.match(/\+(\d+)/);
-      newLine = match ? parseInt(match[1], 10) - 1 : newLine;
-    } else if (l.startsWith("+") && !l.startsWith("+++")) {
-      newLine++;
-      if (newLine === targetLine) return newLine;
-    } else if (!l.startsWith("-")) {
-      newLine++;
-    }
-  }
-  return null;
-}
-
-// 🧩 Fetch actual file content from GitHub
+// 🧩 Fetch file content from GitHub
 async function getFileLines(octokit, owner, repo, path, ref) {
   const { data } = await octokit.repos.getContent({ owner, repo, path, ref });
   const content = Buffer.from(data.content, "base64").toString("utf-8");
   return content.split("\n");
 }
 
+// 🧩 Extract added lines with line numbers
 function extractAddedLinesWithContext(patch) {
   const lines = patch.split("\n");
   const result = [];
@@ -101,22 +85,20 @@ function extractAddedLinesWithContext(patch) {
         newLine = parseInt(match[2], 10);
       }
     } else if (line.startsWith("+") && !line.startsWith("++")) {
-      result.push({
-        code: line.substring(1),
-        line: newLine,
-      });
+      result.push({ code: line.substring(1), line: newLine });
       newLine++;
     } else if (!line.startsWith("-")) {
       oldLine++;
       newLine++;
     }
   }
+
   return result;
 }
 
 // 🚀 Main review endpoint
 app.post("/review", async (req, res) => {
-  const { githubToken, googleKey, owner, repo } = req.body;
+  const { githubToken, googleKey, owner, repo, pull_number } = req.body;
   if (!githubToken || !googleKey || !owner || !repo)
     return res.status(400).json({ error: "Missing required parameters" });
 
@@ -127,21 +109,30 @@ app.post("/review", async (req, res) => {
   });
 
   try {
-    // Get latest open PR
-    const { data: prs } = await octokit.pulls.list({
-      owner,
-      repo,
-      state: "open",
-      sort: "created",
-      direction: "desc",
-      per_page: 1,
-    });
+    let pr;
 
-    if (!prs.length) throw new Error("No open pull requests found.");
-    const pr = prs[0];
+    if (pull_number) {
+      // ✅ Use provided PR number
+      const { data } = await octokit.pulls.get({ owner, repo, pull_number });
+      pr = data;
+    } else {
+      // 🧩 Fallback: get latest open PR
+      const { data: prs } = await octokit.pulls.list({
+        owner,
+        repo,
+        state: "open",
+        sort: "created",
+        direction: "desc",
+        per_page: 1,
+      });
+      if (!prs.length) throw new Error("No open pull requests found.");
+      pr = prs[0];
+    }
+
     const latestSha = pr.head.sha;
-
     const last = getLastReviewedSha();
+
+    // Uncomment to skip already reviewed PRs
     // if (last.prNumber === pr.number && last.commitSha === latestSha)
     //   return res.json({ message: "PR already reviewed." });
 
@@ -153,7 +144,6 @@ app.post("/review", async (req, res) => {
 
     const allComments = [];
 
-    // 🧠 Loop through changed files
     for (const file of files) {
       if (!file.patch) continue;
 
@@ -161,17 +151,16 @@ app.post("/review", async (req, res) => {
 
       const prompt = `
       You are a professional code reviewer analyzing a GitHub pull request diff.
-      
+
       Rules:
-      - Focus only on the ADDED (right-hand side) lines of code — ignore removed ones.
-      - If you notice that some code was REMOVED without replacement or improvement, ask: 
-        "Why was this code removed? It seems necessary or has no alternative added."
-      - Point out logic gaps, missing error handling, potential bugs, or removed validations.
-      - Avoid trivial comments (e.g., formatting, naming unless confusing).
+      - Focus only on ADDED (right-hand side) lines.
+      - If code was REMOVED without a replacement, ask why.
+      - Identify logic gaps, missing error handling, or potential bugs.
+      - Avoid trivial comments (like formatting or naming).
       
       Respond strictly in JSON:
       [
-        { "file": "${file.filename}", "line": <EXACT added or removed line number>, "comment": "Your feedback or question" }
+        { "file": "${file.filename}", "line": <added line number>, "comment": "Your feedback" }
       ]
       
       Patch:
@@ -185,10 +174,8 @@ app.post("/review", async (req, res) => {
         });
 
         const aiComments = extractJSON(response.choices[0].message.content);
-        const addedBlocks = extractAddedBlocks(file.patch);
-        const patchLines = file.patch.split("\n");
+        const addedLines = extractAddedLinesWithContext(file.patch);
 
-        // 🧠 Fetch actual file content
         const fileLines = await getFileLines(
           octokit,
           owner,
@@ -196,30 +183,26 @@ app.post("/review", async (req, res) => {
           file.filename,
           latestSha
         );
-        // When generating the comment body:
-        const addedLines = extractAddedLinesWithContext(file.patch);
 
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
           const match = addedLines.find((l) => l.line === c.line);
           if (!match) continue;
 
-          // Capture 4 lines before and 4 lines after
-          const contextStart = Math.max(0, addedLines.indexOf(match) - 4);
-          const contextEnd = Math.min(
-            addedLines.length,
-            addedLines.indexOf(match) + 5
-          );
+          // Grab 4 lines of context around comment
+          const idx = addedLines.indexOf(match);
+          const contextStart = Math.max(0, idx - 4);
+          const contextEnd = Math.min(addedLines.length, idx + 5);
           const contextLines = addedLines
             .slice(contextStart, contextEnd)
             .map((l) => l.code.trim())
             .join("\n");
 
           const body = `\`\`\`js
-          ${contextLines}
-          \`\`\`
-          
-          💡 **AI Review:** ${c.comment.trim()}`;
+${contextLines}
+\`\`\`
+
+💡 **AI Review:** ${c.comment.trim()}`;
 
           allComments.push({
             path: file.filename,
@@ -233,7 +216,6 @@ app.post("/review", async (req, res) => {
       }
     }
 
-    // 🟩 Post review
     if (!allComments.length) {
       await octokit.pulls.createReview({
         owner,
