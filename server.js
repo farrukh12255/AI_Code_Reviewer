@@ -31,10 +31,13 @@ function saveLastReviewedSha(prNumber, commitSha) {
   );
 }
 
-// 🧩 Extract added line *blocks* + line numbers for each new line
+// 🧩 Extract changed (added/deleted) lines with exact line references
+// 🧩 Extract added line *blocks* for better context
+
 function extractAddedBlocks(patch) {
   const blocks = [];
   const lines = patch.split("\n");
+  console.log("lines: ", lines);
   let newLine = 0;
   let currentBlock = null;
 
@@ -45,16 +48,16 @@ function extractAddedBlocks(patch) {
     } else if (l.startsWith("+") && !l.startsWith("+++")) {
       newLine++;
       if (!currentBlock) {
-        currentBlock = { start: newLine, lines: [], lineNumbers: [] };
+        currentBlock = { start: newLine, lines: [] };
       }
       currentBlock.lines.push(l.replace(/^\+/, ""));
-      currentBlock.lineNumbers.push(newLine);
     } else {
       if (currentBlock) {
         blocks.push({ ...currentBlock, end: newLine });
         currentBlock = null;
       }
       if (!l.startsWith("-")) newLine++;
+      console.log("newLine: ", newLine);
     }
   }
 
@@ -93,7 +96,6 @@ app.post("/review", async (req, res) => {
     // if (last.prNumber === pr.number && last.commitSha === latestSha)
     //   return res.json({ message: "PR already reviewed." });
 
-    // 🧩 Get changed files in PR
     const { data: files } = await octokit.pulls.listFiles({
       owner,
       repo,
@@ -124,6 +126,9 @@ Return JSON only:
 ]
 
 Make sure the "line" corresponds exactly to the "+" line number in the patch.
+for example you selecting line from 40 to 45 and in this line between coming any issue
+that means you are covering the line of code where issue exists e.g console.log, debugger, and any issue comes
+so that dev can understand easily.
 
 Patch:
 ${file.patch}
@@ -136,7 +141,6 @@ ${file.patch}
         });
 
         const aiComments = extractJSON(response.choices[0].message.content);
-        console.log("aiComments: ", aiComments);
         const addedBlocks = extractAddedBlocks(file.patch);
         const patchLines = file.patch.split("\n");
 
@@ -147,36 +151,32 @@ ${file.patch}
           const block = addedBlocks.find(
             (b) => c.line >= b.start && c.line <= b.end
           );
+          console.log("block: ", block);
           if (!block) continue;
 
-          // Determine the most accurate line
-          const commentLine =
-            c.line >= block.start && c.line <= block.end
-              ? c.line
-              : block.lineNumbers?.[0] || block.start;
-
-          // Build small diff context
+          // Capture 4 changed lines before and after the block for richer context
           const blockIndex = patchLines.findIndex((l) =>
-            l.includes(block.lines[0]?.trim())
+            l.includes(block.lines[0].trim())
           );
           const context = patchLines.slice(
             Math.max(0, blockIndex - 4),
             Math.min(patchLines.length, blockIndex + block.lines.length + 4)
           );
 
+          // Show only diff lines (+/-)
           const diffBlock = context.filter((l) => /^[\+\-]/.test(l)).join("\n");
 
           const body = `
-\`\`\`diff
-${diffBlock}
-\`\`\`
-
-💡 **AI Review:** ${c.comment.trim()}
-          `;
-
+        \`\`\`diff
+        ${diffBlock}
+        \`\`\`
+        
+        💡 **AI Review:** ${c.comment.trim()}
+        `;
+          console.log("-----", block.start + 5);
           allComments.push({
             path: c.file || file.filename,
-            line: commentLine,
+            line: block.start,
             side: "RIGHT",
             body,
           });
