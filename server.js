@@ -31,13 +31,10 @@ function saveLastReviewedSha(prNumber, commitSha) {
   );
 }
 
-// 🧩 Extract changed (added/deleted) lines with exact line references
-// 🧩 Extract added line *blocks* for better context
-
+// 🧩 Extract added line blocks + line numbers
 function extractAddedBlocks(patch) {
   const blocks = [];
   const lines = patch.split("\n");
-  console.log("lines: ", lines);
   let newLine = 0;
   let currentBlock = null;
 
@@ -48,21 +45,46 @@ function extractAddedBlocks(patch) {
     } else if (l.startsWith("+") && !l.startsWith("+++")) {
       newLine++;
       if (!currentBlock) {
-        currentBlock = { start: newLine, lines: [] };
+        currentBlock = { start: newLine, lines: [], lineNumbers: [] };
       }
       currentBlock.lines.push(l.replace(/^\+/, ""));
+      currentBlock.lineNumbers.push(newLine);
     } else {
       if (currentBlock) {
         blocks.push({ ...currentBlock, end: newLine });
         currentBlock = null;
       }
       if (!l.startsWith("-")) newLine++;
-      console.log("newLine: ", newLine);
     }
   }
-
   if (currentBlock) blocks.push(currentBlock);
   return blocks;
+}
+
+// 🧩 Map AI line number to diff position
+function findDiffLinePosition(patch, targetLine) {
+  const lines = patch.split("\n");
+  let newLine = 0;
+
+  for (const l of lines) {
+    if (l.startsWith("@@")) {
+      const match = l.match(/\+(\d+)/);
+      newLine = match ? parseInt(match[1], 10) - 1 : newLine;
+    } else if (l.startsWith("+") && !l.startsWith("+++")) {
+      newLine++;
+      if (newLine === targetLine) return newLine;
+    } else if (!l.startsWith("-")) {
+      newLine++;
+    }
+  }
+  return null;
+}
+
+// 🧩 Fetch actual file content from GitHub
+async function getFileLines(octokit, owner, repo, path, ref) {
+  const { data } = await octokit.repos.getContent({ owner, repo, path, ref });
+  const content = Buffer.from(data.content, "base64").toString("utf-8");
+  return content.split("\n");
 }
 
 // 🚀 Main review endpoint
@@ -117,8 +139,8 @@ Focus on:
 - Debug/console left in code
 - Poor variable names
 - Redundant logic
-- Async or missing error handling
-- Potential bugs or bad patterns
+- Missing error handling
+- Potential bugs or bad async logic
 
 Return JSON only:
 [
@@ -126,9 +148,6 @@ Return JSON only:
 ]
 
 Make sure the "line" corresponds exactly to the "+" line number in the patch.
-for example you selecting line from 40 to 45 and in this line between coming any issue
-that means you are covering the line of code where issue exists e.g console.log, debugger, and any issue comes
-so that dev can understand easily.
 
 Patch:
 ${file.patch}
@@ -144,39 +163,44 @@ ${file.patch}
         const addedBlocks = extractAddedBlocks(file.patch);
         const patchLines = file.patch.split("\n");
 
+        // 🧠 Fetch actual file content
+        const fileLines = await getFileLines(
+          octokit,
+          owner,
+          repo,
+          file.filename,
+          latestSha
+        );
+
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
 
-          // Find which block this comment belongs to
           const block = addedBlocks.find(
             (b) => c.line >= b.start && c.line <= b.end
           );
-          console.log("block: ", block);
           if (!block) continue;
 
-          // Capture 4 changed lines before and after the block for richer context
-          const blockIndex = patchLines.findIndex((l) =>
-            l.includes(block.lines[0].trim())
-          );
-          const context = patchLines.slice(
-            Math.max(0, blockIndex - 4),
-            Math.min(patchLines.length, blockIndex + block.lines.length + 4)
-          );
+          const commentLine =
+            c.line >= block.start && c.line <= block.end
+              ? c.line
+              : block.lineNumbers?.[0] || block.start;
 
-          // Show only diff lines (+/-)
-          const diffBlock = context.filter((l) => /^[\+\-]/.test(l)).join("\n");
+          // 🧩 Real code snippet from actual file
+          const start = Math.max(0, commentLine - 3);
+          const end = Math.min(fileLines.length, commentLine + 3);
+          const snippet = fileLines.slice(start, end).join("\n");
 
           const body = `
-        \`\`\`diff
-        ${diffBlock}
-        \`\`\`
-        
-        💡 **AI Review:** ${c.comment.trim()}
-        `;
-          console.log("-----", block.start + 5);
+\`\`\`js
+${snippet}
+\`\`\`
+
+💡 **AI Review:** ${c.comment.trim()}
+`;
+
           allComments.push({
             path: c.file || file.filename,
-            line: block.start,
+            line: commentLine,
             side: "RIGHT",
             body,
           });
@@ -206,7 +230,7 @@ ${file.patch}
       repo,
       pull_number: pr.number,
       commit_id: latestSha,
-      body: "🤖 AI Review completed — see inline comments.",
+      body: "🤖 AI Review completed — see inline comments below.",
       event: "COMMENT",
       comments: allComments,
     });

@@ -3,6 +3,7 @@ var b = [];
 console.log("Starting code...");
 debugger;
 
+
 setTimeout(function () {
   console.log("This is async call");
   debugger;
@@ -14,6 +15,7 @@ setTimeout(function () {
     }
   }
 }, 1000);
+
 
 function Sortarray(arr) {
   console.log("Sorting started...");
