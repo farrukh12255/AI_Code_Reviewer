@@ -87,6 +87,33 @@ async function getFileLines(octokit, owner, repo, path, ref) {
   return content.split("\n");
 }
 
+function extractAddedLinesWithContext(patch) {
+  const lines = patch.split("\n");
+  const result = [];
+  let oldLine = 0,
+    newLine = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      const match = /@@ -(\d+),?\d* \+(\d+),?\d* @@/.exec(line);
+      if (match) {
+        oldLine = parseInt(match[1], 10);
+        newLine = parseInt(match[2], 10);
+      }
+    } else if (line.startsWith("+") && !line.startsWith("++")) {
+      result.push({
+        code: line.substring(1),
+        line: newLine,
+      });
+      newLine++;
+    } else if (!line.startsWith("-")) {
+      oldLine++;
+      newLine++;
+    }
+  }
+  return result;
+}
+
 // 🚀 Main review endpoint
 app.post("/review", async (req, res) => {
   const { githubToken, googleKey, owner, repo } = req.body;
@@ -169,36 +196,34 @@ app.post("/review", async (req, res) => {
           file.filename,
           latestSha
         );
+        // When generating the comment body:
+        const addedLines = extractAddedLinesWithContext(file.patch);
 
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
+          const match = addedLines.find((l) => l.line === c.line);
+          if (!match) continue;
 
-          const block = addedBlocks.find(
-            (b) => c.line >= b.start && c.line <= b.end
+          // Capture 4 lines before and 4 lines after
+          const contextStart = Math.max(0, addedLines.indexOf(match) - 4);
+          const contextEnd = Math.min(
+            addedLines.length,
+            addedLines.indexOf(match) + 5
           );
-          if (!block) continue;
+          const contextLines = addedLines
+            .slice(contextStart, contextEnd)
+            .map((l) => l.code.trim())
+            .join("\n");
 
-          const commentLine =
-            c.line >= block.start && c.line <= block.end
-              ? c.line
-              : block.lineNumbers?.[0] || block.start;
-
-          // 🧩 Real code snippet from actual file
-          const start = Math.max(0, commentLine - 3);
-          const end = Math.min(fileLines.length, commentLine + 3);
-          const snippet = fileLines.slice(start, end).join("\n");
-
-          const body = `
-\`\`\`js
-${snippet}
-\`\`\`
-
-💡 **AI Review:** ${c.comment.trim()}
-`;
+          const body = `\`\`\`js
+          ${contextLines}
+          \`\`\`
+          
+          💡 **AI Review:** ${c.comment.trim()}`;
 
           allComments.push({
-            path: c.file || file.filename,
-            line: commentLine,
+            path: file.filename,
+            line: match.line,
             side: "RIGHT",
             body,
           });
