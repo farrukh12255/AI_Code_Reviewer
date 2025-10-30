@@ -11,6 +11,7 @@ app.use(express.json());
 
 // 🧩 Extract JSON safely from AI response
 function extractJSON(text) {
+  debugger;
   const match = text.match(/\[\s*{[\s\S]*}\s*\]/);
   if (!match) throw new Error("No JSON found in AI response");
   return JSON.parse(match[0]);
@@ -32,35 +33,34 @@ function saveLastReviewedSha(prNumber, commitSha) {
   );
 }
 
-// 🧩 Extract added lines and line numbers
-function extractAddedBlocks(patch) {
-  const blocks = [];
-  const lines = patch.split("\n");
+// 🧩 Extract added lines with correct real line numbers from patch
+function extractAddedLines(patchText) {
+  const lines = patchText.split("\n");
+  const addedLines = [];
+  let oldLine = 0;
   let newLine = 0;
-  let currentBlock = null;
 
-  for (const l of lines) {
-    if (l.startsWith("@@")) {
-      const match = l.match(/\+(\d+)/);
-      newLine = match ? parseInt(match[1], 10) - 1 : newLine;
-    } else if (l.startsWith("+") && !l.startsWith("+++")) {
+  for (const line of lines) {
+    // Parse diff header like: @@ -40,6 +50,8 @@
+    const hunkMatch = line.match(/^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@/);
+    if (hunkMatch) {
+      oldLine = parseInt(hunkMatch[1], 10);
+      newLine = parseInt(hunkMatch[3], 10);
+      continue;
+    }
+
+    if (line.startsWith("+") && !line.startsWith("++")) {
+      addedLines.push({ code: line.slice(1), line: newLine });
       newLine++;
-      if (!currentBlock) {
-        currentBlock = { start: newLine, lines: [], lineNumbers: [] };
-      }
-      currentBlock.lines.push(l.replace(/^\+/, ""));
-      currentBlock.lineNumbers.push(newLine);
+    } else if (line.startsWith("-") && !line.startsWith("--")) {
+      oldLine++;
     } else {
-      if (currentBlock) {
-        blocks.push({ ...currentBlock, end: newLine });
-        currentBlock = null;
-      }
-      if (!l.startsWith("-")) newLine++;
+      oldLine++;
+      newLine++;
     }
   }
 
-  if (currentBlock) blocks.push(currentBlock);
-  return blocks;
+  return addedLines;
 }
 
 // 🧩 Fetch file content from GitHub
@@ -68,32 +68,6 @@ async function getFileLines(octokit, owner, repo, path, ref) {
   const { data } = await octokit.repos.getContent({ owner, repo, path, ref });
   const content = Buffer.from(data.content, "base64").toString("utf-8");
   return content.split("\n");
-}
-
-// 🧩 Extract added lines with line numbers
-function extractAddedLinesWithContext(patch) {
-  const lines = patch.split("\n");
-  const result = [];
-  let oldLine = 0,
-    newLine = 0;
-
-  for (const line of lines) {
-    if (line.startsWith("@@")) {
-      const match = /@@ -(\d+),?\d* \+(\d+),?\d* @@/.exec(line);
-      if (match) {
-        oldLine = parseInt(match[1], 10);
-        newLine = parseInt(match[2], 10);
-      }
-    } else if (line.startsWith("+") && !line.startsWith("++")) {
-      result.push({ code: line.substring(1), line: newLine });
-      newLine++;
-    } else if (!line.startsWith("-")) {
-      oldLine++;
-      newLine++;
-    }
-  }
-
-  return result;
 }
 
 // 🚀 Main review endpoint
@@ -112,11 +86,9 @@ app.post("/review", async (req, res) => {
     let pr;
 
     if (pull_number) {
-      // ✅ Use provided PR number
       const { data } = await octokit.pulls.get({ owner, repo, pull_number });
       pr = data;
     } else {
-      // 🧩 Fallback: get latest open PR
       const { data: prs } = await octokit.pulls.list({
         owner,
         repo,
@@ -131,10 +103,6 @@ app.post("/review", async (req, res) => {
 
     const latestSha = pr.head.sha;
     const last = getLastReviewedSha();
-
-    // Uncomment to skip already reviewed PRs
-    // if (last.prNumber === pr.number && last.commitSha === latestSha)
-    //   return res.json({ message: "PR already reviewed." });
 
     const { data: files } = await octokit.pulls.listFiles({
       owner,
@@ -157,12 +125,20 @@ app.post("/review", async (req, res) => {
       - If code was REMOVED without a replacement, ask why.
       - Identify logic gaps, missing error handling, or potential bugs.
       - Avoid trivial comments (like formatting or naming).
+      - Focus only on ADDED (right-hand side) lines — those that start with "+".
+      - When reporting "line", count only added lines, ignoring context and deleted ones.
+
       
       Respond strictly in JSON:
       [
-        { "file": "${file.filename}", "line": <added line number>, "comment": "Your feedback" }
+        {
+          "file": "${file.filename}",
+          "line": <the Nth ADDED line that starts with '+' in the diff>,
+          "comment": "Your feedback or question"
+        }
       ]
-      
+      Only count lines starting with '+' when deciding line numbers.
+
       Patch:
       ${file.patch}
       `;
@@ -174,39 +150,47 @@ app.post("/review", async (req, res) => {
         });
 
         const aiComments = extractJSON(response.choices[0].message.content);
-        const addedLines = extractAddedLinesWithContext(file.patch);
+        // Gemini gives "line" = Nth added line (not real file line)
+        const addedLines = extractAddedLines(file.patch);
 
-        const fileLines = await getFileLines(
-          octokit,
-          owner,
-          repo,
-          file.filename,
-          latestSha
-        );
-
+        // 🧮 Match Gemini "line" index to actual file line number using diff hunks
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
-          const match = addedLines.find((l) => l.line === c.line);
-          if (!match) continue;
 
-          // Grab 4 lines of context around comment
-          const idx = addedLines.indexOf(match);
-          const contextStart = Math.max(0, idx - 4);
-          const contextEnd = Math.min(addedLines.length, idx + 5);
-          const contextLines = addedLines
+          let realLineEntry = addedLines[c.line - 1];
+
+          // Try to find a more accurate match if Gemini is off
+          if (!realLineEntry) {
+            for (let offset = -3; offset <= 3; offset++) {
+              const nearby = addedLines[c.line - 1 + offset];
+              if (nearby) {
+                console.log(
+                  `⚙️ Adjusted Gemini line ${c.line} → real line ${nearby.line}`
+                );
+                realLineEntry = nearby;
+                break;
+              }
+            }
+          }
+
+          if (!realLineEntry) continue;
+
+          const contextStart = Math.max(0, c.line - 3);
+          const contextEnd = Math.min(addedLines.length, c.line + 2);
+          const context = addedLines
             .slice(contextStart, contextEnd)
-            .map((l) => l.code.trim())
+            .map((l) => l.code)
             .join("\n");
 
           const body = `\`\`\`js
-${contextLines}
-\`\`\`
-
-💡 **AI Review:** ${c.comment.trim()}`;
+  ${context}
+  \`\`\`
+  
+  💡 **AI Review:** ${c.comment.trim()}`;
 
           allComments.push({
             path: file.filename,
-            line: match.line,
+            line: realLineEntry.line, // ✅ correct real line number now
             side: "RIGHT",
             body,
           });
