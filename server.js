@@ -185,7 +185,7 @@ app.post("/review", async (req, res) => {
 
           allComments.push({
             path: c.file || file.filename,
-            line: block.start,
+            line: block.start - 5,
             side: "RIGHT",
             body,
           });
