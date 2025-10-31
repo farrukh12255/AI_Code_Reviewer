@@ -238,7 +238,6 @@
 // app.listen(PORT, () => console.log(`🚀 AI Reviewer running on port ${PORT}`));
 
 // ===================================Deepsick======================================
-
 import express from "express";
 import { Octokit } from "@octokit/rest";
 import OpenAI from "openai";
@@ -461,6 +460,27 @@ class SmartLineMapper {
       .filter((word) => word.length > 3 && !commonWords.has(word.toLowerCase()))
       .map((word) => word.replace(/[^\w]/g, ""));
   }
+
+  // 🆕 Added method to find best match in added lines
+  findBestMatchInAddedLines(commentText, addedLines) {
+    const keywords = commentText
+      .toLowerCase()
+      .split(/\W+/)
+      .filter((word) => word.length > 3);
+
+    for (const addedLine of addedLines) {
+      const lineText = addedLine.code.toLowerCase();
+      const matches = keywords.filter((keyword) =>
+        lineText.includes(keyword)
+      ).length;
+
+      if (matches > 0) {
+        return addedLine;
+      }
+    }
+
+    return addedLines[0]; // Fallback to first added line
+  }
 }
 
 // 🧩 Extract JSON safely from AI response
@@ -576,7 +596,6 @@ app.post("/review", async (req, res) => {
     });
 
     const allComments = [];
-    const lineMapper = new SmartLineMapper(""); // Initialize with empty string
 
     for (const file of files) {
       if (!file.patch) continue;
@@ -591,6 +610,7 @@ app.post("/review", async (req, res) => {
         file.filename,
         pr.head.sha
       );
+      const lineMapper = new SmartLineMapper(fileContent || ""); // 🆕 Create mapper for each file
 
       const prompt = `
       You are a professional code reviewer analyzing a GitHub pull request diff.
@@ -641,24 +661,37 @@ app.post("/review", async (req, res) => {
 
           // If confidence is low, try to find the best matching line in added lines
           if (c.confidence === "low") {
-            const bestMatch = this.findBestMatchInAddedLines(
+            const bestMatch = lineMapper.findBestMatchInAddedLines(
               c.comment,
               addedLines
-            );
+            ); // 🆕 Fixed: use lineMapper
             if (bestMatch) {
               realLineNumber = bestMatch.line;
               confidenceNote = ` (mapped from AI line ${c.line})`;
             }
           }
 
-          const contextStart = Math.max(0, realLineNumber - 3);
-          const contextEnd = Math.min(this.lines.length, realLineNumber + 2);
-          const context = fileContent
-            ? fileContent.split("\n").slice(contextStart, contextEnd).join("\n")
-            : addedLines
-                .slice(contextStart, contextEnd)
-                .map((l) => l.code)
-                .join("\n");
+          // Get context from actual file content if available
+          let context = "";
+          if (fileContent) {
+            const contextStart = Math.max(0, realLineNumber - 3);
+            const contextEnd = Math.min(
+              fileContent.split("\n").length,
+              realLineNumber + 2
+            );
+            context = fileContent
+              .split("\n")
+              .slice(contextStart, contextEnd)
+              .join("\n");
+          } else {
+            // Fallback to added lines context
+            const contextStart = Math.max(0, c.line - 3);
+            const contextEnd = Math.min(addedLines.length, c.line + 2);
+            context = addedLines
+              .slice(contextStart, contextEnd)
+              .map((l) => l.code)
+              .join("\n");
+          }
 
           const body = `\`\`\`js
 ${context}
@@ -723,27 +756,6 @@ ${c.confidence !== "high" ? `\n*Confidence: ${c.confidence}*` : ""}`;
     res.status(500).json({ error: err.message });
   }
 });
-
-// Helper function to find best match in added lines
-function findBestMatchInAddedLines(commentText, addedLines) {
-  const keywords = commentText
-    .toLowerCase()
-    .split(/\W+/)
-    .filter((word) => word.length > 3);
-
-  for (const addedLine of addedLines) {
-    const lineText = addedLine.code.toLowerCase();
-    const matches = keywords.filter((keyword) =>
-      lineText.includes(keyword)
-    ).length;
-
-    if (matches > 0) {
-      return addedLine;
-    }
-  }
-
-  return addedLines[0]; // Fallback to first added line
-}
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🚀 AI Reviewer running on port ${PORT}`));
