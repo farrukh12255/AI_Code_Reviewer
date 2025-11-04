@@ -11,7 +11,6 @@ app.use(express.json());
 
 // 🧩 Extract JSON safely from AI response
 function extractJSON(text) {
-  debugger;
   const match = text.match(/\[\s*{[\s\S]*}\s*\]/);
   if (!match) throw new Error("No JSON found in AI response");
   return JSON.parse(match[0]);
@@ -34,33 +33,55 @@ function saveLastReviewedSha(prNumber, commitSha) {
 }
 
 // 🧩 Extract added lines with correct real line numbers from patch
-function extractAddedLines(patchText) {
-  const lines = patchText.split("\n");
-  const addedLines = [];
-  let oldLine = 0;
-  let newLine = 0;
+// function extractAddedLines(patchText) {
+//   const lines = patchText.split("\n");
+//   const addedLines = [];
+//   let oldLine = 0;
+//   let newLine = 0;
 
-  for (const line of lines) {
-    // Parse diff header like: @@ -40,6 +50,8 @@
-    const hunkMatch = line.match(/^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@/);
-    if (hunkMatch) {
-      oldLine = parseInt(hunkMatch[1], 10);
-      newLine = parseInt(hunkMatch[3], 10);
-      continue;
-    }
+//   for (const line of lines) {
+//     // Parse diff header like: @@ -40,6 +50,8 @@
+//     const hunkMatch = line.match(/^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@/);
+//     if (hunkMatch) {
+//       oldLine = parseInt(hunkMatch[1], 10);
+//       newLine = parseInt(hunkMatch[3], 10);
+//       continue;
+//     }
 
-    if (line.startsWith("+") && !line.startsWith("++")) {
-      addedLines.push({ code: line.slice(1), line: newLine });
-      newLine++;
-    } else if (line.startsWith("-") && !line.startsWith("--")) {
-      oldLine++;
-    } else {
-      oldLine++;
-      newLine++;
+//     if (line.startsWith("+") && !line.startsWith("++")) {
+//       addedLines.push({ code: line.slice(1), line: newLine });
+//       newLine++;
+//     } else if (line.startsWith("-") && !line.startsWith("--")) {
+//       oldLine++;
+//     } else {
+//       oldLine++;
+//       newLine++;
+//     }
+//   }
+
+//   return addedLines;
+// }
+function parseAddedLines(patch) {
+  const lines = patch.split(/\r?\n/);
+  const result = [];
+  let addedLineCount = 0;
+
+  for (const raw of lines) {
+    // Keep only added lines starting with '+', ignore diff metadata like "+++ b/file.js"
+    if (raw.startsWith("+") && !raw.startsWith("+++")) {
+      // Remove ONLY the first '+' so spaces remain untouched
+      const code = raw.slice(1);
+      addedLineCount++;
+
+      // Even if code is empty or just spaces, we keep it
+      result.push({
+        line: addedLineCount,
+        code: code,
+      });
     }
   }
 
-  return addedLines;
+  return result;
 }
 
 // 🧩 Fetch file content from GitHub
@@ -117,22 +138,52 @@ app.post("/review", async (req, res) => {
 
       console.log(`🧠 Reviewing file: ${file.filename}`);
 
-      const prompt = `
+      const prompt =
+        `
       You are a professional code reviewer analyzing a GitHub pull request diff.
 
-      Rules:
-      - Focus only on ADDED (right-hand side) lines.
-      - If code was REMOVED without a replacement, ask why.
-      - Identify logic gaps, missing error handling, or potential bugs.
-      - Avoid trivial comments (like formatting or naming).
-      - Focus only on ADDED (right-hand side) lines — those that start with "+".
-      - When reporting "line", count only added lines, ignoring context and deleted ones.
+      You are reviewing a code patch in unified diff format.
+
+      Your task:
+        1. Parse the diff carefully.
+        2. Identify **every line** in the diff that begins with a ` +
+        ` (including lines that only contain whitespace or comments).
+        3. Count each ` +
+        ` line in the order it appears to determine the line numbers for the **new file** (the “right side” of the diff).
+        4. For every such line, produce an object inside an array using 
+        5. For your knowledge use this func:
+        function parseAddedLines(patch) {
+            const lines = patch.split(/\r?\n/);
+            const result = [];
+            let addedLineCount = 0;
+          
+            for (const raw of lines) {
+              // Keep only added lines starting with '+', ignore diff metadata like "+++ b/file.js"
+              if (raw.startsWith("+") && !raw.startsWith("+++")) {
+                // Remove ONLY the first '+' so spaces remain untouched
+                const code = raw.slice(1);
+                addedLineCount++;
+          
+                // Even if code is empty or just spaces, we keep it
+                result.push({
+                  line: addedLineCount,
+                  code: code,
+                });
+              }
+            }
+          
+            return result;
+          }
+          6. Due to this function you will easy to get exact line
+          7. You do comment only object where you understand in this object 
+          comment need otherwise other object do neglect pick only commented 
+          object which will be serialized which get from the above point function.
 
       Respond strictly in JSON:
       [
         {
           "file": "${file.filename}",
-          "line": <the Nth ADDED line that starts with '+' in the diff>,
+          "line": <line number of the added line in the new file>,
           "comment": "Your feedback or question"
         }
       ]
@@ -144,13 +195,14 @@ app.post("/review", async (req, res) => {
 
       try {
         const response = await openai.chat.completions.create({
-          model: "gemini-2.0-flash",
+          model: "gemini-2.5-flash",
           messages: [{ role: "user", content: prompt }],
         });
 
         const aiComments = extractJSON(response.choices[0].message.content);
-        // Gemini gives "line" = Nth added line (not real file line)
-        const addedLines = extractAddedLines(file.patch);
+
+        // const addedLines = extractAddedLines(file.patch);
+        const addedLines = parseAddedLines(file.patch);
 
         // 🧮 Match Gemini "line" index to actual file line number using diff hunks
         for (const c of aiComments) {
