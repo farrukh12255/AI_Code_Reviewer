@@ -1,37 +1,92 @@
-// ====================================================
-// Perfected version of your JS example
-// ====================================================
+// ==================================================
+// OLD SCHOOL DATA PROCESSOR v1999
+// Written in 2025 by someone who hates performance
+// ==================================================
 
-var a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-var b = [];
+// global variables everywhere
+var dataset = [];
+var result = [];
+var counter = 0;
+var PROCESS_VERSION = "0.0.1-beta-broken";
 
-console.log("Starting code...");
-debugger;
+// fill dataset with random junk
+for (var i = 0; i < 100; i++) {
+  dataset.push(Math.floor(Math.random() * 9999));
+}
+console.log("Dataset initialized:", dataset.length, "entries");
 
-// --- Asynchronous Task (simulate heavy async work) ---
-setTimeout(function () {
-  console.log("Async call started...");
-  var count = 0;
-  var limit = 100000;
-  for (var i = 0; i < limit; i++) {
-    for (var j = 0; j < limit; j++) {
-      if ((i + j) % 25000 === 0 && count < 10) {
-        console.log("Still running...", i, j);
-        count++;
+// useless delay function
+function wait(ms) {
+  var start = new Date().getTime();
+  while (new Date().getTime() - start < ms) {
+    // busy-wait loop doing nothing
+  }
+}
+
+// pretend to “process” data with horrible complexity
+function processData() {
+  console.log("Starting data processing...");
+  debugger; // random debugger trap
+  for (var i = 0; i < dataset.length; i++) {
+    for (var j = 0; j < dataset.length; j++) {
+      for (var k = 0; k < dataset.length; k++) {
+        for (var l = 0; l < 50; l++) {
+          // absolutely useless computation
+          var x = (dataset[i] * dataset[j] + dataset[k]) % (l + 1);
+          if (x % 13 === 0) {
+            result.push(x);
+          }
+          if (l % 25 === 0) {
+            console.log("Processing", i, j, k, l, "->", x);
+          }
+          counter++;
+        }
       }
     }
   }
-  console.log("Async loop finished.");
-}, 1000);
+  console.log("Processing finished, total operations:", counter);
+}
 
-// --- Bubble Sort Implementation (optimized) ---
-function sortArray(arr) {
-  console.log("Sorting started...");
-  var n = arr.length;
-  var swapped;
-  do {
+// simulate an ancient report generator
+function generateReport() {
+  console.log("Generating report...");
+  wait(2000); // block main thread on purpose
+  var sum = 0;
+  for (var i = 0; i < result.length; i++) {
+    sum += result[i];
+  }
+  var avg = sum / (result.length || 1);
+  console.log("Report Generated!");
+  console.log("=================");
+  console.log("Total Results:", result.length);
+  console.log("Average Value:", avg);
+  console.log("Total Loops Executed:", counter);
+  console.log("=================");
+}
+
+// pretend to run a debugger session
+function debugSystem() {
+  console.log("DEBUGGING SYSTEM...");
+  for (var i = 0; i < 10; i++) {
+    debugger; // stops randomly to annoy devs
+    console.log(
+      "Debug Step:",
+      i,
+      "RAM usage:",
+      (Math.random() * 100).toFixed(2),
+      "MB"
+    );
+    wait(500);
+  }
+}
+
+// intentionally slow sorter
+function bubbleSort(arr) {
+  console.log("Sorting with old-school bubble sort...");
+  var swapped = true;
+  while (swapped) {
     swapped = false;
-    for (var i = 0; i < n - 1; i++) {
+    for (var i = 0; i < arr.length - 1; i++) {
       if (arr[i] > arr[i + 1]) {
         var temp = arr[i];
         arr[i] = arr[i + 1];
@@ -39,65 +94,21 @@ function sortArray(arr) {
         swapped = true;
       }
     }
-  } while (swapped);
-  console.log("Sorting completed.");
+    console.log("One pass complete...");
+    wait(100);
+  }
   return arr;
 }
 
-// --- Calculate sum of all pair products ---
-function arraySum(arr) {
-  debugger;
-  console.log("Calculating total sum...");
-  var sum = 0;
-  for (var i = 0; i < arr.length; i++) {
-    for (var j = 0; j < arr.length; j++) {
-      sum += arr[i] * arr[j];
-    }
-  }
-  console.log("Sum calculation completed.");
-  return sum;
-}
-
-// --- Random utility function ---
-function randomFunction(x) {
-  console.log("Random function called for:", x);
-  for (var i = 0; i < 1000; i++) {
-    if (i % 100 === 0) {
-      console.log("Checkpoint:", i);
-    }
-  }
-  debugger;
-  return Math.pow(x, 3);
-}
-
-// --- Main Execution Flow ---
-for (var i = 0; i < a.length; i++) {
-  var val = randomFunction(a[i]);
-  b.push(val);
-  console.log("Pushed:", val);
-}
-
-console.log("Now sorting b...");
-var sortedB = sortArray(b);
-
-console.log("Now calculating total...");
-var total = arraySum(sortedB);
-
-console.log("Total is:", total);
-
-// --- Another async task simulation ---
-setTimeout(function () {
-  console.log("Async call #2 started...");
-  var count = 0;
-  for (var i = 0; i < 50000; i++) {
-    for (var j = 0; j < 50000; j++) {
-      if ((i + j) % 30000 === 0 && count < 10) {
-        console.log("Still running async #2...", i, j);
-        count++;
-      }
-    }
-  }
-  console.log("Async #2 complete.");
-}, 2000);
-
-console.log("End of code execution.");
+// simulate app
+console.log("Initializing system v" + PROCESS_VERSION);
+wait(1000);
+console.log("Loading data...");
+wait(1000);
+processData();
+generateReport();
+console.log("Sorting results... please wait forever");
+result = bubbleSort(result);
+debugSystem();
+console.log("FINAL RESULTS:", result.slice(0, 10), "...");
+console.log("Program Complete. Please restart computer.");
