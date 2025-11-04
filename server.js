@@ -38,7 +38,6 @@ function parseAddedLines(patch) {
   let currentLineNum = 0;
 
   for (const raw of lines) {
-    // detect hunk header, e.g. @@ -23,7 +23,8 @@
     const hunkMatch = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunkMatch) {
       currentLineNum = parseInt(hunkMatch[1], 10);
@@ -50,19 +49,11 @@ function parseAddedLines(patch) {
       result.push({ line: currentLineNum, code });
       currentLineNum++;
     } else if (!raw.startsWith("-")) {
-      // context line, advance counter
       currentLineNum++;
     }
   }
 
   return result;
-}
-
-// 🧩 Fetch file content from GitHub
-async function getFileLines(octokit, owner, repo, path, ref) {
-  const { data } = await octokit.repos.getContent({ owner, repo, path, ref });
-  const content = Buffer.from(data.content, "base64").toString("utf-8");
-  return content.split("\n");
 }
 
 // 🚀 Main review endpoint
@@ -96,39 +87,56 @@ app.post("/review", async (req, res) => {
       pr = prs[0];
     }
 
-    // 🧩 Compare current PR head with last reviewed commit
     const latestSha = pr.head.sha;
     const last = getLastReviewedSha();
 
-    // 🧩 If PR was already reviewed and no new commit, skip review
+    // 🧩 Skip if nothing new since last review
     if (last.prNumber === pr.number && last.commitSha === latestSha) {
       return res.json({ message: "✅ No new commits to review — skipping." });
     }
 
     let files = [];
+    let commitsSummary = [];
 
-    // 🧩 If we have a previous commit, compare commits to find changed files
+    // 🧩 If previously reviewed, get diff from last reviewed commit
     if (last.prNumber === pr.number && last.commitSha) {
+      console.log(
+        `🔍 Comparing commits from ${last.commitSha.slice(
+          0,
+          7
+        )} → ${latestSha.slice(0, 7)}`
+      );
+
       const { data: compare } = await octokit.repos.compareCommits({
         owner,
         repo,
         base: last.commitSha,
         head: latestSha,
       });
+
       files = compare.files || [];
-      console.log(`📂 Found ${files.length} changed files since last review`);
+      commitsSummary = compare.commits.map((c) => ({
+        sha: c.sha.slice(0, 7),
+        message: c.commit.message.split("\n")[0],
+      }));
+
+      console.log(`📜 Found ${compare.commits.length} new commits:`);
+      for (const c of commitsSummary) {
+        console.log(`   • ${c.sha} — ${c.message}`);
+      }
+
+      console.log(`📂 ${files.length} files changed since last review`);
     } else {
-      // 🧩 First review — review all PR files
+      // 🧩 First time review — review everything
       const { data: allFiles } = await octokit.pulls.listFiles({
         owner,
         repo,
         pull_number: pr.number,
       });
       files = allFiles;
-      console.log(`📂 Reviewing all ${files.length} PR files (first review)`);
+      console.log(`📂 First review — reviewing all ${files.length} PR files`);
     }
 
-    // 🧩 Skip if no files changed
     if (!files.length) {
       saveLastReviewedSha(pr.number, latestSha);
       return res.json({ message: "✅ No changed files since last review." });
@@ -138,7 +146,6 @@ app.post("/review", async (req, res) => {
 
     for (const file of files) {
       if (!file.patch) continue;
-
       console.log(`🧠 Reviewing file: ${file.filename}`);
 
       const prompt = `
@@ -148,35 +155,33 @@ app.post("/review", async (req, res) => {
 
       Your task:
         1. Parse the diff carefully.
-        2. Identify every line in the diff that begins with a '+'.
-        3. Count each '+' line in the order it appears to determine the line numbers for the new file.
-        4. For every such line, produce a JSON object with file, line, and comment.
-        5. Use this helper to reason about added lines:
+        2. Identify every line that begins with '+'.
+        3. Count each '+' line in order to determine line numbers for the new file.
+        4. For each such line, produce a JSON object { file, line, comment }.
+        5. Only include meaningful comments (no "looks good" filler).
+        6. Use this function for reference:
         function parseAddedLines(patch) {
-            const lines = patch.split(/\\r?\\n/);
-            const result = [];
-            let addedLineCount = 0;
-          
-            for (const raw of lines) {
-              if (raw.startsWith("+") && !raw.startsWith("+++")) {
-                const code = raw.slice(1);
-                addedLineCount++;
-                result.push({ line: addedLineCount, code });
-              }
+          const lines = patch.split(/\\r?\\n/);
+          const result = [];
+          let addedLineCount = 0;
+          for (const raw of lines) {
+            if (raw.startsWith("+") && !raw.startsWith("+++")) {
+              const code = raw.slice(1);
+              addedLineCount++;
+              result.push({ line: addedLineCount, code });
             }
-            return result;
+          }
+          return result;
         }
-        6. Only include comments for lines that need feedback.
 
       Respond strictly in JSON:
       [
         {
           "file": "${file.filename}",
-          "line": <line number in new file>,
-          "comment": "Your feedback or question"
+          "line": <line number>,
+          "comment": "Your feedback or suggestion"
         }
       ]
-      Only count lines starting with '+' when deciding line numbers.
 
       Patch:
       ${file.patch}
@@ -244,7 +249,7 @@ ${context}
       return res.json({ message: "✅ No issues found." });
     }
 
-    console.log(`💬 Found ${allComments.length} issues — posting...`);
+    console.log(`💬 Found ${allComments.length} review comments — posting...`);
 
     await octokit.pulls.createReview({
       owner,
@@ -260,6 +265,7 @@ ${context}
     res.json({
       message: "✅ AI Review completed.",
       comments: allComments.length,
+      commitsReviewed: commitsSummary,
     });
   } catch (err) {
     console.error("❌ Error:", err.message);
