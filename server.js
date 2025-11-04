@@ -32,63 +32,28 @@ function saveLastReviewedSha(prNumber, commitSha) {
   );
 }
 
-// 🧩 Extract added lines with correct real line numbers from patch
-// function extractAddedLines(patchText) {
-//   const lines = patchText.split("\n");
-//   const addedLines = [];
-//   let oldLine = 0;
-//   let newLine = 0;
-
-//   for (const line of lines) {
-//     // Parse diff header like: @@ -40,6 +50,8 @@
-//     const hunkMatch = line.match(/^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@/);
-//     if (hunkMatch) {
-//       oldLine = parseInt(hunkMatch[1], 10);
-//       newLine = parseInt(hunkMatch[3], 10);
-//       continue;
-//     }
-
-//     if (line.startsWith("+") && !line.startsWith("++")) {
-//       addedLines.push({ code: line.slice(1), line: newLine });
-//       newLine++;
-//     } else if (line.startsWith("-") && !line.startsWith("--")) {
-//       oldLine++;
-//     } else {
-//       oldLine++;
-//       newLine++;
-//     }
-//   }
-
-//   return addedLines;
-// }
 function parseAddedLines(patch) {
   const lines = patch.split(/\r?\n/);
   const result = [];
-  let addedLineCount = 0;
+  let currentLineNum = 0;
 
   for (const raw of lines) {
-    // Keep only added lines starting with '+', ignore diff metadata like "+++ b/file.js"
-    if (raw.startsWith("+") && !raw.startsWith("+++")) {
-      // Remove ONLY the first '+' so spaces remain untouched
-      const code = raw.slice(1);
-      addedLineCount++;
+    const hunkMatch = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunkMatch) {
+      currentLineNum = parseInt(hunkMatch[1], 10);
+      continue;
+    }
 
-      // Even if code is empty or just spaces, we keep it
-      result.push({
-        line: addedLineCount,
-        code: code,
-      });
+    if (raw.startsWith("+") && !raw.startsWith("+++")) {
+      const code = raw.slice(1);
+      result.push({ line: currentLineNum, code });
+      currentLineNum++;
+    } else if (!raw.startsWith("-")) {
+      currentLineNum++;
     }
   }
 
   return result;
-}
-
-// 🧩 Fetch file content from GitHub
-async function getFileLines(octokit, owner, repo, path, ref) {
-  const { data } = await octokit.repos.getContent({ owner, repo, path, ref });
-  const content = Buffer.from(data.content, "base64").toString("utf-8");
-  return content.split("\n");
 }
 
 // 🚀 Main review endpoint
@@ -125,69 +90,98 @@ app.post("/review", async (req, res) => {
     const latestSha = pr.head.sha;
     const last = getLastReviewedSha();
 
-    const { data: files } = await octokit.pulls.listFiles({
-      owner,
-      repo,
-      pull_number: pr.number,
-    });
+    // 🧩 Skip if nothing new since last review
+    if (last.prNumber === pr.number && last.commitSha === latestSha) {
+      return res.json({ message: "✅ No new commits to review — skipping." });
+    }
+
+    let files = [];
+    let commitsSummary = [];
+
+    // 🧩 If previously reviewed, get diff from last reviewed commit
+    if (last.prNumber === pr.number && last.commitSha) {
+      console.log(
+        `🔍 Comparing commits from ${last.commitSha.slice(
+          0,
+          7
+        )} → ${latestSha.slice(0, 7)}`
+      );
+
+      const { data: compare } = await octokit.repos.compareCommits({
+        owner,
+        repo,
+        base: last.commitSha,
+        head: latestSha,
+      });
+
+      files = compare.files || [];
+      commitsSummary = compare.commits.map((c) => ({
+        sha: c.sha.slice(0, 7),
+        message: c.commit.message.split("\n")[0],
+      }));
+
+      console.log(`📜 Found ${compare.commits.length} new commits:`);
+      for (const c of commitsSummary) {
+        console.log(`   • ${c.sha} — ${c.message}`);
+      }
+
+      console.log(`📂 ${files.length} files changed since last review`);
+    } else {
+      // 🧩 First time review — review everything
+      const { data: allFiles } = await octokit.pulls.listFiles({
+        owner,
+        repo,
+        pull_number: pr.number,
+      });
+      files = allFiles;
+      console.log(`📂 First review — reviewing all ${files.length} PR files`);
+    }
+
+    if (!files.length) {
+      saveLastReviewedSha(pr.number, latestSha);
+      return res.json({ message: "✅ No changed files since last review." });
+    }
 
     const allComments = [];
 
     for (const file of files) {
       if (!file.patch) continue;
-
       console.log(`🧠 Reviewing file: ${file.filename}`);
 
-      const prompt =
-        `
+      const prompt = `
       You are a professional code reviewer analyzing a GitHub pull request diff.
 
       You are reviewing a code patch in unified diff format.
 
       Your task:
         1. Parse the diff carefully.
-        2. Identify **every line** in the diff that begins with a ` +
-        ` (including lines that only contain whitespace or comments).
-        3. Count each ` +
-        ` line in the order it appears to determine the line numbers for the **new file** (the “right side” of the diff).
-        4. For every such line, produce an object inside an array using 
-        5. For your knowledge use this func:
+        2. Identify every line that begins with '+'.
+        3. Count each '+' line in order to determine line numbers for the new file.
+        4. For each such line, produce a JSON object { file, line, comment }.
+        5. Only include meaningful comments (no "looks good" filler).
+        6. Use this function for reference:
         function parseAddedLines(patch) {
-            const lines = patch.split(/\r?\n/);
-            const result = [];
-            let addedLineCount = 0;
-          
-            for (const raw of lines) {
-              // Keep only added lines starting with '+', ignore diff metadata like "+++ b/file.js"
-              if (raw.startsWith("+") && !raw.startsWith("+++")) {
-                // Remove ONLY the first '+' so spaces remain untouched
-                const code = raw.slice(1);
-                addedLineCount++;
-          
-                // Even if code is empty or just spaces, we keep it
-                result.push({
-                  line: addedLineCount,
-                  code: code,
-                });
-              }
+          const lines = patch.split(/\\r?\\n/);
+          const result = [];
+          let addedLineCount = 0;
+          for (const raw of lines) {
+            if (raw.startsWith("+") && !raw.startsWith("+++")) {
+              const code = raw.slice(1);
+              addedLineCount++;
+              result.push({ line: addedLineCount, code });
             }
-          
-            return result;
           }
-          6. Due to this function you will easy to get exact line
-          7. You do comment only object where you understand in this object 
-          comment need otherwise other object do neglect pick only commented 
-          object which will be serialized which get from the above point function.
+          return result;
+        }
 
       Respond strictly in JSON:
       [
         {
           "file": "${file.filename}",
-          "line": <line number of the added line in the new file>,
-          "comment": "Your feedback or question"
+          "line": <line number>,
+          "comment": "Your feedback or suggestion"
         }
       ]
-      Only count lines starting with '+' when deciding line numbers.
 
       Patch:
       ${file.patch}
@@ -200,24 +194,16 @@ app.post("/review", async (req, res) => {
         });
 
         const aiComments = extractJSON(response.choices[0].message.content);
-
-        // const addedLines = extractAddedLines(file.patch);
         const addedLines = parseAddedLines(file.patch);
 
-        // 🧮 Match Gemini "line" index to actual file line number using diff hunks
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
 
           let realLineEntry = addedLines[c.line - 1];
-
-          // Try to find a more accurate match if Gemini is off
           if (!realLineEntry) {
             for (let offset = -3; offset <= 3; offset++) {
               const nearby = addedLines[c.line - 1 + offset];
               if (nearby) {
-                console.log(
-                  `⚙️ Adjusted Gemini line ${c.line} → real line ${nearby.line}`
-                );
                 realLineEntry = nearby;
                 break;
               }
@@ -234,14 +220,14 @@ app.post("/review", async (req, res) => {
             .join("\n");
 
           const body = `\`\`\`js
-  ${context}
-  \`\`\`
+${context}
+\`\`\`
 
-  💡 **AI Review:** ${c.comment.trim()}`;
+💡 **AI Review:** ${c.comment.trim()}`;
 
           allComments.push({
             path: file.filename,
-            line: realLineEntry.line, // ✅ correct real line number now
+            line: realLineEntry.line,
             side: "RIGHT",
             body,
           });
@@ -263,7 +249,7 @@ app.post("/review", async (req, res) => {
       return res.json({ message: "✅ No issues found." });
     }
 
-    console.log(`💬 Found ${allComments.length} issues — posting...`);
+    console.log(`💬 Found ${allComments.length} review comments — posting...`);
 
     await octokit.pulls.createReview({
       owner,
@@ -279,6 +265,7 @@ app.post("/review", async (req, res) => {
     res.json({
       message: "✅ AI Review completed.",
       comments: allComments.length,
+      commitsReviewed: commitsSummary,
     });
   } catch (err) {
     console.error("❌ Error:", err.message);
