@@ -32,56 +32,7 @@ function saveLastReviewedSha(prNumber, commitSha) {
   );
 }
 
-// 🧩 Extract added lines with correct real line numbers from patch
-// function extractAddedLines(patchText) {
-//   const lines = patchText.split("\n");
-//   const addedLines = [];
-//   let oldLine = 0;
-//   let newLine = 0;
-
-//   for (const line of lines) {
-//     // Parse diff header like: @@ -40,6 +50,8 @@
-//     const hunkMatch = line.match(/^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@/);
-//     if (hunkMatch) {
-//       oldLine = parseInt(hunkMatch[1], 10);
-//       newLine = parseInt(hunkMatch[3], 10);
-//       continue;
-//     }
-
-//     if (line.startsWith("+") && !line.startsWith("++")) {
-//       addedLines.push({ code: line.slice(1), line: newLine });
-//       newLine++;
-//     } else if (line.startsWith("-") && !line.startsWith("--")) {
-//       oldLine++;
-//     } else {
-//       oldLine++;
-//       newLine++;
-//     }
-//   }
-
-//   return addedLines;
-// }
 function parseAddedLines(patch) {
-  //   const lines = patch.split(/\r?\n/);
-  //   const result = [];
-  //   let addedLineCount = 0;
-
-  //   for (const raw of lines) {
-  //     // Keep only added lines starting with '+', ignore diff metadata like "+++ b/file.js"
-  //     if (raw.startsWith("+") && !raw.startsWith("+++")) {
-  //       // Remove ONLY the first '+' so spaces remain untouched
-  //       const code = raw.slice(1);
-  //       addedLineCount++;
-
-  //       // Even if code is empty or just spaces, we keep it
-  //       result.push({
-  //         line: addedLineCount,
-  //         code: code,
-  //       });
-  //     }
-  //   }
-
-  //   return result;
   const lines = patch.split(/\r?\n/);
   const result = [];
   let currentLineNum = 0;
@@ -222,7 +173,6 @@ app.post("/review", async (req, res) => {
         debugger;
         const aiComments = extractJSON(response.choices[0].message.content);
 
-        // const addedLines = extractAddedLines(file.patch);
         const addedLines = parseAddedLines(file.patch);
 
         // 🧮 Match Gemini "line" index to actual file line number using diff hunks
