@@ -62,22 +62,45 @@ function saveLastReviewedSha(prNumber, commitSha) {
 //   return addedLines;
 // }
 function parseAddedLines(patch) {
+  //   const lines = patch.split(/\r?\n/);
+  //   const result = [];
+  //   let addedLineCount = 0;
+
+  //   for (const raw of lines) {
+  //     // Keep only added lines starting with '+', ignore diff metadata like "+++ b/file.js"
+  //     if (raw.startsWith("+") && !raw.startsWith("+++")) {
+  //       // Remove ONLY the first '+' so spaces remain untouched
+  //       const code = raw.slice(1);
+  //       addedLineCount++;
+
+  //       // Even if code is empty or just spaces, we keep it
+  //       result.push({
+  //         line: addedLineCount,
+  //         code: code,
+  //       });
+  //     }
+  //   }
+
+  //   return result;
   const lines = patch.split(/\r?\n/);
   const result = [];
-  let addedLineCount = 0;
+  let currentLineNum = 0;
 
   for (const raw of lines) {
-    // Keep only added lines starting with '+', ignore diff metadata like "+++ b/file.js"
-    if (raw.startsWith("+") && !raw.startsWith("+++")) {
-      // Remove ONLY the first '+' so spaces remain untouched
-      const code = raw.slice(1);
-      addedLineCount++;
+    // detect hunk header, e.g. @@ -23,7 +23,8 @@
+    const hunkMatch = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunkMatch) {
+      currentLineNum = parseInt(hunkMatch[1], 10);
+      continue;
+    }
 
-      // Even if code is empty or just spaces, we keep it
-      result.push({
-        line: addedLineCount,
-        code: code,
-      });
+    if (raw.startsWith("+") && !raw.startsWith("+++")) {
+      const code = raw.slice(1);
+      result.push({ line: currentLineNum, code });
+      currentLineNum++;
+    } else if (!raw.startsWith("-")) {
+      // context line, advance counter
+      currentLineNum++;
     }
   }
 
@@ -175,9 +198,7 @@ app.post("/review", async (req, res) => {
             return result;
           }
           6. Due to this function you will easy to get exact line
-          7. You do comment only object where you understand in this object 
-          comment need otherwise other object do neglect pick only commented 
-          object which will be serialized which get from the above point function.
+          7.You should pick only the relevant objects where you understand that a comment is needed; otherwise, ignore the other objects and pick only those with comments and with relevant line.
 
       Respond strictly in JSON:
       [
@@ -198,7 +219,7 @@ app.post("/review", async (req, res) => {
           model: "gemini-2.5-flash",
           messages: [{ role: "user", content: prompt }],
         });
-
+        debugger;
         const aiComments = extractJSON(response.choices[0].message.content);
 
         // const addedLines = extractAddedLines(file.patch);
@@ -209,9 +230,11 @@ app.post("/review", async (req, res) => {
           if (!c.comment || c.comment.length < 5) continue;
 
           let realLineEntry = addedLines[c.line - 1];
+          debugger;
 
           // Try to find a more accurate match if Gemini is off
           if (!realLineEntry) {
+            debugger;
             for (let offset = -3; offset <= 3; offset++) {
               const nearby = addedLines[c.line - 1 + offset];
               if (nearby) {
