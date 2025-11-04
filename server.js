@@ -96,14 +96,43 @@ app.post("/review", async (req, res) => {
       pr = prs[0];
     }
 
+    // 🧩 Compare current PR head with last reviewed commit
     const latestSha = pr.head.sha;
     const last = getLastReviewedSha();
 
-    const { data: files } = await octokit.pulls.listFiles({
-      owner,
-      repo,
-      pull_number: pr.number,
-    });
+    // 🧩 If PR was already reviewed and no new commit, skip review
+    if (last.prNumber === pr.number && last.commitSha === latestSha) {
+      return res.json({ message: "✅ No new commits to review — skipping." });
+    }
+
+    let files = [];
+
+    // 🧩 If we have a previous commit, compare commits to find changed files
+    if (last.prNumber === pr.number && last.commitSha) {
+      const { data: compare } = await octokit.repos.compareCommits({
+        owner,
+        repo,
+        base: last.commitSha,
+        head: latestSha,
+      });
+      files = compare.files || [];
+      console.log(`📂 Found ${files.length} changed files since last review`);
+    } else {
+      // 🧩 First review — review all PR files
+      const { data: allFiles } = await octokit.pulls.listFiles({
+        owner,
+        repo,
+        pull_number: pr.number,
+      });
+      files = allFiles;
+      console.log(`📂 Reviewing all ${files.length} PR files (first review)`);
+    }
+
+    // 🧩 Skip if no files changed
+    if (!files.length) {
+      saveLastReviewedSha(pr.number, latestSha);
+      return res.json({ message: "✅ No changed files since last review." });
+    }
 
     const allComments = [];
 
@@ -112,50 +141,38 @@ app.post("/review", async (req, res) => {
 
       console.log(`🧠 Reviewing file: ${file.filename}`);
 
-      const prompt =
-        `
+      const prompt = `
       You are a professional code reviewer analyzing a GitHub pull request diff.
 
       You are reviewing a code patch in unified diff format.
 
       Your task:
         1. Parse the diff carefully.
-        2. Identify **every line** in the diff that begins with a ` +
-        ` (including lines that only contain whitespace or comments).
-        3. Count each ` +
-        ` line in the order it appears to determine the line numbers for the **new file** (the “right side” of the diff).
-        4. For every such line, produce an object inside an array using 
-        5. For your knowledge use this func:
+        2. Identify every line in the diff that begins with a '+'.
+        3. Count each '+' line in the order it appears to determine the line numbers for the new file.
+        4. For every such line, produce a JSON object with file, line, and comment.
+        5. Use this helper to reason about added lines:
         function parseAddedLines(patch) {
-            const lines = patch.split(/\r?\n/);
+            const lines = patch.split(/\\r?\\n/);
             const result = [];
             let addedLineCount = 0;
           
             for (const raw of lines) {
-              // Keep only added lines starting with '+', ignore diff metadata like "+++ b/file.js"
               if (raw.startsWith("+") && !raw.startsWith("+++")) {
-                // Remove ONLY the first '+' so spaces remain untouched
                 const code = raw.slice(1);
                 addedLineCount++;
-          
-                // Even if code is empty or just spaces, we keep it
-                result.push({
-                  line: addedLineCount,
-                  code: code,
-                });
+                result.push({ line: addedLineCount, code });
               }
             }
-          
             return result;
-          }
-          6. Due to this function you will easy to get exact line
-          7.You should pick only the relevant objects where you understand that a comment is needed; otherwise, ignore the other objects and pick only those with comments and with relevant line.
+        }
+        6. Only include comments for lines that need feedback.
 
       Respond strictly in JSON:
       [
         {
           "file": "${file.filename}",
-          "line": <line number of the added line in the new file>,
+          "line": <line number in new file>,
           "comment": "Your feedback or question"
         }
       ]
@@ -170,27 +187,18 @@ app.post("/review", async (req, res) => {
           model: "gemini-2.5-flash",
           messages: [{ role: "user", content: prompt }],
         });
-        debugger;
-        const aiComments = extractJSON(response.choices[0].message.content);
 
+        const aiComments = extractJSON(response.choices[0].message.content);
         const addedLines = parseAddedLines(file.patch);
 
-        // 🧮 Match Gemini "line" index to actual file line number using diff hunks
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
 
           let realLineEntry = addedLines[c.line - 1];
-          debugger;
-
-          // Try to find a more accurate match if Gemini is off
           if (!realLineEntry) {
-            debugger;
             for (let offset = -3; offset <= 3; offset++) {
               const nearby = addedLines[c.line - 1 + offset];
               if (nearby) {
-                console.log(
-                  `⚙️ Adjusted Gemini line ${c.line} → real line ${nearby.line}`
-                );
                 realLineEntry = nearby;
                 break;
               }
@@ -207,14 +215,14 @@ app.post("/review", async (req, res) => {
             .join("\n");
 
           const body = `\`\`\`js
-  ${context}
-  \`\`\`
+${context}
+\`\`\`
 
-  💡 **AI Review:** ${c.comment.trim()}`;
+💡 **AI Review:** ${c.comment.trim()}`;
 
           allComments.push({
             path: file.filename,
-            line: realLineEntry.line, // ✅ correct real line number now
+            line: realLineEntry.line,
             side: "RIGHT",
             body,
           });
