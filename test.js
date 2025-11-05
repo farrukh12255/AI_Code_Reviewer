@@ -3,18 +3,6 @@ var b = [];
 console.log("Starting code...");
 debugger;
 
-setTimeout(function () {
-  console.log("This is async call");
-  debugger;
-  for (var i = 0; i < 99999; i++) {
-    for (var j = 0; j < 99999; j++) {
-      if ((i + j) % 12345 === 0) {
-        console.log("Still running...", i, j);
-      }
-    }
-  }
-}, 1000);
-
 function Sortarray(arr) {
   console.log("Sorting started...");
   for (var i = 0; i < arr.length; i++) {
@@ -29,7 +17,7 @@ function Sortarray(arr) {
   }
   return arr;
 }
-
+console.log("counter", counter);
 function arraySum(arr) {
   debugger;
   var s = 0;
