@@ -36,6 +36,9 @@ function processData() {
           if (x % 13 === 0) {
             result.push(x);
           }
+          if (counter == 34) {
+            console.log(true);
+          }
           if (l % 25 === 0) {
             console.log("Processing", i, j, k, l, "->", x);
           }
