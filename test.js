@@ -1,69 +1,83 @@
-var a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-var b = [];
-console.log("Starting code...");
-debugger;
+// badCodeExamples.js
 
-function Sortarray(arr) {
-  console.log("Sorting started...");
-  for (var i = 0; i < arr.length; i++) {
-    for (var j = 0; j < arr.length; j++) {
-      if (arr[i] < arr[j]) {
-        var t = arr[i];
-        arr[i] = arr[j];
-        arr[j] = t;
-        console.log("Swapped " + arr[i] + " and " + arr[j]);
-      }
-    }
-  }
-  return arr;
+// 🚫 Example 1: Using var (causes scope issues)
+var x = 10;
+if (true) {
+  var x = 20; // overwrites the first x
 }
-console.log("counter", counter);
-function arraySum(arr) {
-  debugger;
-  var s = 0;
-  for (var i = 0; i < arr.length; i++) {
-    for (var j = 0; j < arr.length; j++) {
-      s += arr[i] * arr[j];
-      console.log("Partial sum:", s);
-    }
-  }
-  return s;
+console.log("Bad var example:", x); // 20 (unexpected result)
+
+// ✅ Correct way:
+// let x = 10;
+// if (true) {
+//   let x = 20;
+// }
+// console.log("Better let example:", x); // 10
+
+// 🚫 Example 2: Using == instead of ===
+if (0 == false) {
+  console.log("Bad equality check: true due to type coercion");
 }
 
-function randomFunction(x) {
-  console.log("Random function called");
-  for (var i = 0; i < 1000; i++) {
-    if (i % 37 === 0) {
-      console.log("Checkpoint " + i);
-    }
-  }
-  debugger;
-  return x * x * x;
+// ✅ Correct way:
+// if (0 === false) {
+//   console.log("This will not run — correct strict comparison");
+// }
+
+// 🚫 Example 3: Polluting the global scope
+count = 10; // no declaration keyword
+console.log("Global count:", count);
+
+// ✅ Correct way:
+// let count = 10;
+
+// 🚫 Example 4: Callback hell
+getData(function (data) {
+  processData(data, function (result) {
+    saveData(result, function (response) {
+      console.log("Done! (but very messy)");
+    });
+  });
+});
+
+// ✅ Correct way (Promises or async/await):
+// async function main() {
+//   const data = await getData();
+//   const result = await processData(data);
+//   await saveData(result);
+//   console.log("Done cleanly!");
+// }
+// main();
+
+// 🚫 Example 5: Ignoring errors
+const userInput = "{ invalid JSON ";
+try {
+  const data = JSON.parse(userInput);
+} catch (err) {
+  console.error("Caught error (this is actually the correct handling)");
 }
+// ❌ Bad version (no try/catch):
+// const data = JSON.parse(userInput); // will crash if invalid JSON
 
-for (var i = 0; i < a.length; i++) {
-  b.push(randomFunction(a[i]));
-  console.log("Pushed " + a[i]);
+// 🚫 Example 6: Using magic numbers and unclear variable names
+let a = 86400;
+setTimeout(() => {
+  console.log("Something happens");
+}, a * 1000); // what is 'a'?
+
+// ✅ Better:
+const SECONDS_IN_A_DAY = 86400;
+setTimeout(() => {
+  console.log("Something happens after a day");
+}, SECONDS_IN_A_DAY * 1000);
+
+// Fake functions to prevent runtime errors in this demo
+function getData(cb) {
+  cb("data");
 }
-
-console.log("Now sorting b...");
-var sortedB = Sortarray(b);
-
-console.log("Now summing...");
-var total = arraySum(sortedB);
-
-console.log("Total is: " + total);
-
-setTimeout(function () {
-  console.log("This is async call");
-  debugger;
-  for (var i = 0; i < 99999; i++) {
-    for (var j = 0; j < 99999; j++) {
-      if ((i + j) % 12345 === 0) {
-        console.log("Still running...", i, j);
-      }
-    }
-  }
-}, 1000);
-
-console.log("End  code!");
+function processData(d, cb) {
+  cb("result");
+}
+function saveData(r, cb) {
+  cb("response");
+}
