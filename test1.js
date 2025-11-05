@@ -25,26 +25,30 @@ function wait(ms) {
 
 // pretend to “process” data with horrible complexity
 function processData() {
-  const lines = patch.split(/\r?\n/);
-  const result = [];
-  let addedLineCount = 0;
-
-  for (const raw of lines) {
-    // Keep only added lines starting with '+', ignore diff metadata like "+++ b/file.js"
-    if (raw.startsWith("+") && !raw.startsWith("+++")) {
-      // Remove ONLY the first '+' so spaces remain untouched
-      const code = raw.slice(1);
-      addedLineCount++;
-
-      // Even if code is empty or just spaces, we keep it
-      result.push({
-        line: addedLineCount,
-        code: code,
-      });
+  console.log("Starting data processing...");
+  debugger; // random debugger trap
+  for (var i = 0; i < dataset.length; i++) {
+    for (var j = 0; j < dataset.length; j++) {
+      for (var k = 0; k < dataset.length; k++) {
+        for (var l = 0; l < 50; l++) {
+          // absolutely useless computation
+          var x = (dataset[i] * dataset[j] + dataset[k]) % (l + 1);
+          if (x % 13 === 0) {
+            result.push(x);
+          }
+          if (counter == 34) {
+            console.log(true);
+          }
+          if (l % 25 === 0) {
+            console.log("Processing", i, j, k, l, "->", x);
+          }
+          //   is this variable declare anywhere
+          counter++;
+        }
+      }
     }
   }
-
-  return result;
+  console.log("Processing finished, total operations:", counter);
 }
 
 // simulate an ancient report generator
