@@ -2,6 +2,7 @@
 
 // 🚫 Example 1: Using var (causes scope issues)
 var x = 10;
+let x = true;
 if (true) {
   var x = 20; // overwrites the first x
 }

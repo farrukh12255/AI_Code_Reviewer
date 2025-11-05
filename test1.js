@@ -50,7 +50,32 @@ function processData() {
   }
   console.log("Processing finished, total operations:", counter);
 }
-
+function processData() {
+  console.log("Starting data processing...");
+  debugger; // random debugger trap
+  for (var i = 0; i < dataset.length; i++) {
+    for (var j = 0; j < dataset.length; j++) {
+      for (var k = 0; k < dataset.length; k++) {
+        for (var l = 0; l < 50; l++) {
+          // absolutely useless computation
+          var x = (dataset[i] * dataset[j] + dataset[k]) % (l + 1);
+          if (x % 13 === 0) {
+            result.push(x);
+          }
+          if (counter == 34) {
+            console.log(true);
+          }
+          if (l % 25 === 0) {
+            console.log("Processing", i, j, k, l, "->", x);
+          }
+          //   is this variable declare anywhere
+          counter++;
+        }
+      }
+    }
+  }
+  console.log("Processing finished, total operations:", counter);
+}
 // simulate an ancient report generator
 function generateReport() {
   console.log("Generating report...");
