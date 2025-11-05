@@ -1,36 +1,41 @@
-import java.util.Scanner;
+import java.util.*;
 
-public class worseCodeExample {
+public class badCodeExample {
 
-    static Scanner input = new Scanner(System.in);
-    static int number = 0;
+    static int x;
 
-    public static void main(String[] args) {
-        worseCodeExample example = new worseCodeExample();
-        example.main(null); // recursive main call – infinite recursion
+    public static void main(String args[]) {
+        badCodeExample obj = new badCodeExample();
+        obj.doSomething(5);
     }
 
-    public void start() {
-        System.out.println("Enter a number");
-        number = input.nextInt();
-        if (number > 10)
-            if (number < 5)
-                System.out.println("Impossible!"); // unreachable
-            else
-                System.out.println("Maybe!");
-        else
-            System.out.println("Okay");
-
-        switch (number) {
-            case 1:
-                System.out.println("One");
-            case 2:
-                System.out.println("Two");
-            default:
-                System.out.println("Nothing"); // no breaks – all cases fall through
+    public void doSomething(int y) {
+        if (y = 5) {
+            System.out.println("Y is 5");
         }
 
-        for (int i = 0; i >= 0; i++) { // infinite loop
-            if (i == 5)
-                i = -1; // never terminates
+        for (int i = 0; i < 10; i++);
+        {
+            System.out.println("This runs once, not in a loop!");
         }
+
+        List list = new ArrayList();
+        list.add("Hello");
+        list.add(123);
+        System.out.println(list.get(1));
+
+        String s = null;
+        System.out.println(s.length());
+
+        try {
+            int result = 10 / 0;
+        } catch (Exception e) {
+        }
+
+        badCodeExample();
+    }
+
+    public void badCodeExample() {
+        System.out.println("Not actually a constructor");
+    }
+}
