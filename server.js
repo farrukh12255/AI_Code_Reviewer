@@ -1,23 +1,54 @@
-import express from "express";
 import { Octokit } from "@octokit/rest";
 import OpenAI from "openai";
+import { execSync } from "child_process";
 import dotenv from "dotenv";
 import fs from "fs";
 
 dotenv.config();
 
-const app = express();
-app.use(express.json());
+// 🔐 Setup clients
+const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+const openai = new OpenAI({
+  apiKey: process.env.GOOGLE_API_KEY,
+  baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+});
 
-// 🧩 Extract JSON safely from AI response
+// 🧩 Helper: Extract GitHub owner/repo from git remote URL
+function getRepoInfo() {
+  const remoteUrl = execSync("git config --get remote.origin.url")
+    .toString()
+    .trim();
+  const match = remoteUrl.match(/github\.com[:/](.+?)\/(.+?)(\.git)?$/);
+  if (!match)
+    throw new Error("Could not parse repository info from remote URL");
+
+  const owner = "farrukh12255"; // keep your username
+  const repo = match[2];
+  return { owner, repo };
+}
+
+// 🧩 Helper: Extract JSON array from AI response
 function extractJSON(text) {
   const match = text.match(/\[\s*{[\s\S]*}\s*\]/);
   if (!match) throw new Error("No JSON found in AI response");
   return JSON.parse(match[0]);
 }
 
-// 🧩 Save/retrieve last reviewed PR info
-function getLastReviewedShas() {
+// 🧩 Helper: Get latest open PR
+async function getLatestOpenPR(owner, repo) {
+  const { data } = await octokit.pulls.list({
+    owner,
+    repo,
+    state: "open",
+    sort: "created",
+    direction: "desc",
+    per_page: 1,
+  });
+  return data.length ? data[0] : null;
+}
+
+// 🧩 Track last reviewed PR
+function getLastReviewedSha() {
   try {
     return JSON.parse(fs.readFileSync(".last_pr_sha.json", "utf-8"));
   } catch {
@@ -25,216 +56,120 @@ function getLastReviewedShas() {
   }
 }
 
-function saveLastReviewedSha(owner, repo, prNumber, commitSha) {
-  const data = getLastReviewedShas();
-  const key = `${owner}/${repo}#${prNumber}`;
-  data[key] = commitSha;
-  fs.writeFileSync(".last_pr_sha.json", JSON.stringify(data, null, 2));
+function saveLastReviewedSha(prNumber, commitSha) {
+  fs.writeFileSync(
+    ".last_pr_sha.json",
+    JSON.stringify({ prNumber, commitSha }, null, 2)
+  );
 }
 
-function parseAddedLines(patch) {
-  const lines = patch.split(/\r?\n/);
-  const result = [];
-  let currentLineNum = 0;
+// 🧩 Helper: Extract added lines context from patch
+function extractAddedLines(patch) {
+  const added = [];
+  const lines = patch.split("\n");
+  let lineNumber = 0;
 
-  for (const raw of lines) {
-    const hunkMatch = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (hunkMatch) {
-      currentLineNum = parseInt(hunkMatch[1], 10);
-      continue;
-    }
-
-    if (raw.startsWith("+") && !raw.startsWith("+++")) {
-      const code = raw.slice(1);
-      result.push({ line: currentLineNum, code });
-      currentLineNum++;
-    } else if (!raw.startsWith("-")) {
-      currentLineNum++;
+  for (const l of lines) {
+    if (l.startsWith("@@")) {
+      const match = l.match(/\+(\d+)/);
+      lineNumber = match ? parseInt(match[1], 10) - 1 : lineNumber;
+    } else if (l.startsWith("+") && !l.startsWith("+++")) {
+      lineNumber++;
+      added.push({ line: lineNumber, code: l.replace(/^\+/, "") });
+    } else if (!l.startsWith("-")) {
+      lineNumber++;
     }
   }
-
-  return result;
+  return added;
 }
 
-// 🚀 Main review endpoint
-app.post("/review", async (req, res) => {
-  const { githubToken, googleKey, owner, repo, pull_number } = req.body;
-  if (!githubToken || !googleKey || !owner || !repo)
-    return res.status(400).json({ error: "Missing required parameters" });
-
-  const octokit = new Octokit({ auth: githubToken });
-  const openai = new OpenAI({
-    apiKey: googleKey,
-    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-  });
-
+// 🚀 Main
+async function run() {
   try {
-    let pr;
+    const { owner, repo } = getRepoInfo();
+    const pr = await getLatestOpenPR(owner, repo);
+    if (!pr) throw new Error("No open pull requests found.");
 
-    // 🧩 Fetch PR
-    if (pull_number) {
-      const { data } = await octokit.pulls.get({ owner, repo, pull_number });
-      pr = data;
-    } else {
-      const { data: prs } = await octokit.pulls.list({
-        owner,
-        repo,
-        state: "open",
-        sort: "created",
-        direction: "desc",
-        per_page: 1,
-      });
-      if (!prs.length) throw new Error("No open pull requests found.");
-      pr = prs[0];
+    const latestRemoteSha = pr.head.sha;
+    const last = getLastReviewedSha();
+
+    if (last.prNumber === pr.number && last.commitSha === latestRemoteSha) {
+      console.log("🕒 PR commit already reviewed — skipping duplicate run.");
+      return;
     }
 
-    const latestSha = pr.head.sha;
-    // 🧩 Load & check last reviewed SHA per PR
-    const lastShas = getLastReviewedShas();
-    const key = `${owner}/${repo}#${pr.number}`;
-    const lastReviewedSha = lastShas[key];
+    console.log(`✅ Reviewing PR #${pr.number} (${latestRemoteSha})...`);
 
-    if (lastReviewedSha === latestSha) {
-      return res.json({ message: "✅ No new commits to review — skipping." });
-    }
-
-    let files = [];
-    let commitsSummary = [];
-
-    // 🧩 If previously reviewed, compare commits from last reviewed SHA
-    if (lastReviewedSha) {
-      console.log(
-        `🔍 Comparing commits from ${lastReviewedSha.slice(
-          0,
-          7
-        )} → ${latestSha.slice(0, 7)}`
-      );
-
-      const { data: compare } = await octokit.repos.compareCommits({
-        owner,
-        repo,
-        base: lastReviewedSha,
-        head: latestSha,
-      });
-
-      files = compare.files || [];
-      commitsSummary = compare.commits.map((c) => ({
-        sha: c.sha.slice(0, 7),
-        message: c.commit.message.split("\n")[0],
-      }));
-
-      console.log(`📜 Found ${compare.commits.length} new commits:`);
-      for (const c of commitsSummary) {
-        console.log(`   • ${c.sha} — ${c.message}`);
-      }
-
-      console.log(`📂 ${files.length} files changed since last review`);
-    } else {
-      // 🆕 First-time review → review all files
-      const { data: allFiles } = await octokit.pulls.listFiles({
-        owner,
-        repo,
-        pull_number: pr.number,
-      });
-      files = allFiles;
-      console.log(`🆕 First review — reviewing all ${files.length} PR files`);
-    }
-
-    // 🧩 No files changed
-    if (!files.length) {
-      saveLastReviewedSha(owner, repo, pr.number, latestSha);
-      return res.json({ message: "✅ No changed files since last review." });
-    }
+    // Fetch changed files
+    const { data: files } = await octokit.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: pr.number,
+    });
 
     const allComments = [];
 
-    // 🧠 Loop through changed files
     for (const file of files) {
       if (!file.patch) continue;
-      console.log(`🧠 Reviewing file: ${file.filename}`);
 
-      const prompt = `
-      You are a professional code reviewer analyzing a GitHub pull request diff.
+      const reviewPrompt = `
+You are a strict code reviewer. Analyze ONLY the added lines in this patch.
 
-      You are reviewing a code patch in unified diff format.
+Focus on:
+- Potential bugs or inefficiencies
+- Unnecessary console.log/debugger statements
+- Async or missing error handling
+- Code smell or redundant logic
+- Try to use latest js code implementaion
 
-      Your task:
-        1. Parse the diff carefully.
-        2. Identify every line that begins with '+'.
-        3. Count each '+' line in order to determine line numbers for the new file.
-        4. For each such line, produce a JSON object { file, line, comment }.
-        5. Only include meaningful comments (no "looks good" filler).
-        6. Use this function for reference:
-        function parseAddedLines(patch) {
-          const lines = patch.split(/\\r?\\n/);
-          const result = [];
-          let addedLineCount = 0;
-          for (const raw of lines) {
-            if (raw.startsWith("+") && !raw.startsWith("+++")) {
-              const code = raw.slice(1);
-              addedLineCount++;
-              result.push({ line: addedLineCount, code });
-            }
-          }
-          return result;
-        }
+Output JSON only:
+[
+  { "file": "${file.filename}", "line": 12, "comment": "Example issue" }
+]
 
-      Respond strictly in JSON:
-      [
-        {
-          "file": "${file.filename}",
-          "line": <line number>,
-          "comment": "Your feedback or suggestion"
-        }
-      ]
+Patch:
+${file.patch}
+`;
 
-      Patch:
-      ${file.patch}
-      `;
+      console.log(`🧠 Analyzing ${file.filename}...`);
 
       try {
-        const response = await openai.chat.completions.create({
-          model: "gemini-2.5-flash",
-          messages: [{ role: "user", content: prompt }],
+        const res = await openai.chat.completions.create({
+          model: "gemini-2.0-flash",
+          messages: [{ role: "user", content: reviewPrompt }],
         });
 
-        const aiComments = extractJSON(response.choices[0].message.content);
-        const addedLines = parseAddedLines(file.patch);
+        const raw = res.choices[0].message.content;
+        const aiComments = extractJSON(raw);
+        const addedLines = extractAddedLines(file.patch);
 
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
 
-          let realLineEntry = addedLines[c.line - 1];
-          if (!realLineEntry) {
-            for (let offset = -3; offset <= 3; offset++) {
-              const nearby = addedLines[c.line - 1 + offset];
-              if (nearby) {
-                realLineEntry = nearby;
-                break;
-              }
-            }
-          }
+          // find closest added line
+          const match = addedLines.find((l) => l.line === c.line);
+          if (!match) continue;
 
-          if (!realLineEntry) continue;
-
-          const contextStart = Math.max(0, c.line - 3);
-          const contextEnd = Math.min(addedLines.length, c.line + 2);
-          const context = addedLines
-            .slice(contextStart, contextEnd)
-            .map((l) => l.code)
-            .join("\n");
-
-          const body = `\`\`\`js
-${context}
+          const bodyWithContext = `\`\`\`js
+${match.code.trim()}
 \`\`\`
 
 💡 **AI Review:** ${c.comment.trim()}`;
 
+          // avoid duplicates
+          const duplicate = allComments.some(
+            (x) =>
+              x.path === (c.file || file.filename) &&
+              x.line === match.line &&
+              x.body === bodyWithContext
+          );
+          if (duplicate) continue;
+
           allComments.push({
-            path: file.filename,
-            line: realLineEntry.line,
+            path: c.file || file.filename,
+            line: match.line,
             side: "RIGHT",
-            body,
+            body: bodyWithContext,
           });
         }
       } catch (err) {
@@ -242,44 +177,36 @@ ${context}
       }
     }
 
-    // 🧩 If no AI comments → simple message instead of approval
     if (!allComments.length) {
+      console.log("✅ No issues found — approving PR.");
       await octokit.pulls.createReview({
         owner,
         repo,
         pull_number: pr.number,
-        body: "🤖 AI Review: No issues found — PR looks good!",
+        body: "🤖 AI Review: No issues found — PR looks clean!",
         event: "APPROVE",
       });
-      saveLastReviewedSha(owner, repo, pr.number, latestSha);
-      return res.json({ message: "✅ No issues found." });
+      saveLastReviewedSha(pr.number, latestRemoteSha);
+      return;
     }
 
-    console.log(`💬 Found ${allComments.length} review comments — posting...`);
+    console.log(`💬 Found ${allComments.length} issues — posting review...`);
 
     await octokit.pulls.createReview({
       owner,
       repo,
       pull_number: pr.number,
-      commit_id: latestSha,
+      commit_id: latestRemoteSha,
       body: "🤖 AI Review completed — see inline comments below.",
       event: "COMMENT",
       comments: allComments,
     });
 
-    // 🧩 Save latest reviewed SHA
-    saveLastReviewedSha(owner, repo, pr.number, latestSha);
-
-    res.json({
-      message: "✅ AI Review completed.",
-      comments: allComments.length,
-      commitsReviewed: commitsSummary,
-    });
+    saveLastReviewedSha(pr.number, latestRemoteSha);
+    console.log("✅ AI review completed successfully!");
   } catch (err) {
     console.error("❌ Error:", err.message);
-    res.status(500).json({ error: err.message });
   }
-});
+}
 
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`🚀 AI Reviewer running on port ${PORT}`));
+run();
