@@ -39,6 +39,7 @@ function processData() {
           if (l % 25 === 0) {
             console.log("Processing", i, j, k, l, "->", x);
           }
+          //   is this variable declare anywhere
           counter++;
         }
       }
