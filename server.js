@@ -17,7 +17,7 @@ function extractJSON(text) {
 }
 
 // 🧩 Save/retrieve last reviewed PR info
-function getLastReviewedSha() {
+function getLastReviewedShas() {
   try {
     return JSON.parse(fs.readFileSync(".last_pr_sha.json", "utf-8"));
   } catch {
@@ -25,11 +25,11 @@ function getLastReviewedSha() {
   }
 }
 
-function saveLastReviewedSha(prNumber, commitSha) {
-  fs.writeFileSync(
-    ".last_pr_sha.json",
-    JSON.stringify({ prNumber, commitSha }, null, 2)
-  );
+function saveLastReviewedSha(owner, repo, prNumber, commitSha) {
+  const data = getLastReviewedShas();
+  const key = `${owner}/${repo}#${prNumber}`;
+  data[key] = commitSha;
+  fs.writeFileSync(".last_pr_sha.json", JSON.stringify(data, null, 2));
 }
 
 function parseAddedLines(patch) {
@@ -71,6 +71,7 @@ app.post("/review", async (req, res) => {
   try {
     let pr;
 
+    // 🧩 Fetch PR
     if (pull_number) {
       const { data } = await octokit.pulls.get({ owner, repo, pull_number });
       pr = data;
@@ -88,20 +89,22 @@ app.post("/review", async (req, res) => {
     }
 
     const latestSha = pr.head.sha;
-    const last = getLastReviewedSha();
+    // 🧩 Load & check last reviewed SHA per PR
+    const lastShas = getLastReviewedShas();
+    const key = `${owner}/${repo}#${pr.number}`;
+    const lastReviewedSha = lastShas[key];
 
-    // 🧩 Skip if nothing new since last review
-    if (last.prNumber === pr.number && last.commitSha === latestSha) {
+    if (lastReviewedSha === latestSha) {
       return res.json({ message: "✅ No new commits to review — skipping." });
     }
 
     let files = [];
     let commitsSummary = [];
 
-    // 🧩 If previously reviewed, get diff from last reviewed commit
-    if (last.prNumber === pr.number && last.commitSha) {
+    // 🧩 If previously reviewed, compare commits from last reviewed SHA
+    if (lastReviewedSha) {
       console.log(
-        `🔍 Comparing commits from ${last.commitSha.slice(
+        `🔍 Comparing commits from ${lastReviewedSha.slice(
           0,
           7
         )} → ${latestSha.slice(0, 7)}`
@@ -110,7 +113,7 @@ app.post("/review", async (req, res) => {
       const { data: compare } = await octokit.repos.compareCommits({
         owner,
         repo,
-        base: last.commitSha,
+        base: lastReviewedSha,
         head: latestSha,
       });
 
@@ -127,23 +130,25 @@ app.post("/review", async (req, res) => {
 
       console.log(`📂 ${files.length} files changed since last review`);
     } else {
-      // 🧩 First time review — review everything
+      // 🆕 First-time review → review all files
       const { data: allFiles } = await octokit.pulls.listFiles({
         owner,
         repo,
         pull_number: pr.number,
       });
       files = allFiles;
-      console.log(`📂 First review — reviewing all ${files.length} PR files`);
+      console.log(`🆕 First review — reviewing all ${files.length} PR files`);
     }
 
+    // 🧩 No files changed
     if (!files.length) {
-      saveLastReviewedSha(pr.number, latestSha);
+      saveLastReviewedSha(owner, repo, pr.number, latestSha);
       return res.json({ message: "✅ No changed files since last review." });
     }
 
     const allComments = [];
 
+    // 🧠 Loop through changed files
     for (const file of files) {
       if (!file.patch) continue;
       console.log(`🧠 Reviewing file: ${file.filename}`);
@@ -237,6 +242,7 @@ ${context}
       }
     }
 
+    // 🧩 If no AI comments → simple message instead of approval
     if (!allComments.length) {
       await octokit.pulls.createReview({
         owner,
@@ -245,7 +251,7 @@ ${context}
         body: "🤖 AI Review: No issues found — PR looks good!",
         event: "APPROVE",
       });
-      saveLastReviewedSha(pr.number, latestSha);
+      saveLastReviewedSha(owner, repo, pr.number, latestSha);
       return res.json({ message: "✅ No issues found." });
     }
 
@@ -261,7 +267,9 @@ ${context}
       comments: allComments,
     });
 
-    saveLastReviewedSha(pr.number, latestSha);
+    // 🧩 Save latest reviewed SHA
+    saveLastReviewedSha(owner, repo, pr.number, latestSha);
+
     res.json({
       message: "✅ AI Review completed.",
       comments: allComments.length,
