@@ -1,143 +1,84 @@
-// ==================================================
-// OLD SCHOOL DATA PROCESSOR v1999
-// Written in 2025 by someone who hates performance
-// ==================================================
+// badCodeExamples.js
 
-// global variables everywhere
-var dataset = [];
-var result = [];
-var counter = 0;
-var PROCESS_VERSION = "0.0.1-beta-broken";
-
-// fill dataset with random junk
-for (var i = 0; i < 100; i++) {
-  dataset.push(Math.floor(Math.random() * 9999));
+// 🚫 Example 1: Using var (causes scope issues)
+var x = 10;
+let x = true;
+if (true) {
+  var x = 20; // overwrites the first x
 }
-console.log("Dataset initialized:", dataset.length, "entries");
+console.log("Bad var example:", x); // 20 (unexpected result)
 
-// useless delay function
-function wait(ms) {
-  var start = new Date().getTime();
-  while (new Date().getTime() - start < ms) {
-    // busy-wait loop doing nothing
-  }
+// ✅ Correct way:
+// let x = 10;
+// if (true) {
+//   let x = 20;
+// }
+// console.log("Better let example:", x); // 10
+
+// 🚫 Example 2: Using == instead of ===
+if (0 == false) {
+  console.log("Bad equality check: true due to type coercion");
 }
 
-// pretend to “process” data with horrible complexity
-function processData() {
-  console.log("Starting data processing...");
-  debugger; // random debugger trap
-  for (var i = 0; i < dataset.length; i++) {
-    for (var j = 0; j < dataset.length; j++) {
-      for (var k = 0; k < dataset.length; k++) {
-        for (var l = 0; l < 50; l++) {
-          // absolutely useless computation
-          var x = (dataset[i] * dataset[j] + dataset[k]) % (l + 1);
-          if (x % 13 === 0) {
-            result.push(x);
-          }
-          if (counter == 34) {
-            console.log(true);
-          }
-          if (l % 25 === 0) {
-            console.log("Processing", i, j, k, l, "->", x);
-          }
-          //   is this variable declare anywhere
-          counter++;
-        }
-      }
-    }
-  }
-  console.log("Processing finished, total operations:", counter);
-}
-function processData() {
-  console.log("Starting data processing...");
-  debugger; // random debugger trap
-  for (var i = 0; i < dataset.length; i++) {
-    for (var j = 0; j < dataset.length; j++) {
-      for (var k = 0; k < dataset.length; k++) {
-        for (var l = 0; l < 50; l++) {
-          // absolutely useless computation
-          var x = (dataset[i] * dataset[j] + dataset[k]) % (l + 1);
-          if (x % 13 === 0) {
-            result.push(x);
-          }
-          if (counter == 34) {
-            console.log(true);
-          }
-          if (l % 25 === 0) {
-            console.log("Processing", i, j, k, l, "->", x);
-          }
-          //   is this variable declare anywhere
-          counter++;
-        }
-      }
-    }
-  }
-  console.log("Processing finished, total operations:", counter);
-}
-// simulate an ancient report generator
-function generateReport() {
-  console.log("Generating report...");
-  wait(2000); // block main thread on purpose
-  var sum = 0;
-  for (var i = 0; i < result.length; i++) {
-    sum += result[i];
-  }
-  var avg = sum / (result.length || 1);
-  console.log("Report Generated!");
-  console.log("=================");
-  console.log("Total Results:", result.length);
-  console.log("Average Value:", avg);
-  console.log("Total Loops Executed:", counter);
-  console.log("=================");
-}
+// ✅ Correct way:
+// if (0 === false) {
+//   console.log("This will not run — correct strict comparison");
+// }
 
-// pretend to run a debugger session
-function debugSystem() {
-  console.log("DEBUGGING SYSTEM...");
-  for (var i = 0; i < 10; i++) {
-    debugger; // stops randomly to annoy devs
-    console.log(
-      "Debug Step:",
-      i,
-      "RAM usage:",
-      (Math.random() * 100).toFixed(2),
-      "MB"
-    );
-    wait(500);
-  }
-}
+// 🚫 Example 3: Polluting the global scope
+count = 10; // no declaration keyword
+console.log("Global count:", count);
 
-// intentionally slow sorter
-function bubbleSort(arr) {
-  console.log("Sorting with old-school bubble sort...");
-  var swapped = true;
-  while (swapped) {
-    swapped = false;
-    for (var i = 0; i < arr.length - 1; i++) {
-      if (arr[i] > arr[i + 1]) {
-        var temp = arr[i];
-        arr[i] = arr[i + 1];
-        arr[i + 1] = temp;
-        swapped = true;
-      }
-    }
-    console.log("One pass complete...");
-    wait(100);
-  }
-  return arr;
-}
+// ✅ Correct way:
+// let count = 10;
 
-// simulate app
-console.log("Initializing system v" + PROCESS_VERSION);
-wait(1000);
-console.log("Loading data...");
-wait(1000);
-processData();
-generateReport();
-console.log("Sorting results... please wait forever");
-result = bubbleSort(result);
-debugSystem();
-console.log("FINAL RESULTS:", result.slice(0, 10), "...");
-console.log("Program Complete. Please restart computer.");
+// 🚫 Example 4: Callback hell
+getData(function (data) {
+  processData(data, function (result) {
+    saveData(result, function (response) {
+      console.log("Done! (but very messy)");
+    });
+  });
+});
+
+// ✅ Correct way (Promises or async/await):
+// async function main() {
+//   const data = await getData();
+//   const result = await processData(data);
+//   await saveData(result);
+//   console.log("Done cleanly!");
+// }
+// main();
+
+// 🚫 Example 5: Ignoring errors
+const userInput = "{ invalid JSON ";
+try {
+  const data = JSON.parse(userInput);
+} catch (err) {
+  console.error("Caught error (this is actually the correct handling)");
+}
+// ❌ Bad version (no try/catch):
+// const data = JSON.parse(userInput); // will crash if invalid JSON
+
+// 🚫 Example 6: Using magic numbers and unclear variable names
+let a = 86400;
+setTimeout(() => {
+  console.log("Something happens");
+}, a * 1000); // what is 'a'?
+
+// ✅ Better:
+const SECONDS_IN_A_DAY = 86400;
+setTimeout(() => {
+  console.log("Something happens after a day");
+}, SECONDS_IN_A_DAY * 1000);
+
+// Fake functions to prevent runtime errors in this demo
+function getData(cb) {
+  cb("data");
+}
+function processData(d, cb) {
+  cb("result");
+}
+function saveData(r, cb) {
+  cb("response");
+}
