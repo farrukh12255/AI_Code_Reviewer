@@ -10,7 +10,8 @@ dotenv.config();
 const app = express();
 // Allow all origins (for dev only)
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" })); // Increase request body size if needed
+app.set("timeout", 60000); // Set 1-minute timeout for long-running requests
 
 // 🧩 Extract JSON safely from AI response
 function extractJSON(text) {
@@ -23,7 +24,7 @@ function extractJSON(text) {
 // 🧩 Save/retrieve last reviewed PR info
 function getLastReviewedShas() {
   try {
-    return JSON.parse(fs.readFileSync(".last_pr_sha.json", "utf-8"));
+    return JSON.parse(fs.readFileSync("../last_pr_sha.json", "utf-8"));
   } catch {
     return {};
   }
@@ -33,7 +34,7 @@ function saveLastReviewedSha(owner, repo, prNumber, commitSha) {
   const data = getLastReviewedShas();
   const key = `${owner}/${repo}#${prNumber}`;
   data[key] = commitSha;
-  fs.writeFileSync(".last_pr_sha.json", JSON.stringify(data, null, 2));
+  fs.writeFileSync("../last_pr_sha.json", JSON.stringify(data, null, 2));
 }
 
 function parseAddedLines(patch) {
