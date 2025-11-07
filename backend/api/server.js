@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import dotenv from "dotenv";
 import fs from "fs";
 import cors from "cors";
+import { kv } from "@vercel/kv";
 
 dotenv.config();
 
@@ -21,21 +22,54 @@ function extractJSON(text) {
   return JSON.parse(match[0]);
 }
 
-// 🧩 Save/retrieve last reviewed PR info
-function getLastReviewedShas() {
-  try {
-    return JSON.parse(fs.readFileSync("../last_pr_sha.json", "utf-8"));
-  } catch {
-    return {};
+// ------------------------------ for dev ---------------------------------
+// // 🧩 Save/retrieve last reviewed PR info
+// function getLastReviewedShas() {
+//   try {
+//     return JSON.parse(fs.readFileSync("../last_pr_sha.json", "utf-8"));
+//   } catch {
+//     return {};
+//   }
+// }
+
+// function saveLastReviewedSha(owner, repo, prNumber, commitSha) {
+//   const data = getLastReviewedShas();
+//   const key = `${owner}/${repo}#${prNumber}`;
+//   data[key] = commitSha;
+//   fs.writeFileSync("../last_pr_sha.json", JSON.stringify(data, null, 2));
+// }
+
+// ------------------------------ for dev ---------------------------------
+// ------------------------------ for production ---------------------------------
+
+async function getLastReviewedShas() {
+  const data = await kv.get("last_reviewed_shas");
+  // If nothing stored yet, return empty object
+  return data ?? {};
+}
+
+async function saveLastReviewedSha(owner, repo, prNumber, commitSha) {
+  const key = `${owner}/${repo}#${prNumber}`;
+  const data = await getLastReviewedShas();
+  data[key] = commitSha;
+  await kv.set("last_reviewed_shas", data);
+}
+
+// Example usage in your handler
+export default async function handler(req, res) {
+  if (req.method === "POST") {
+    const { owner, repo, prNumber, commitSha } = req.body;
+    await saveLastReviewedSha(owner, repo, prNumber, commitSha);
+    return res.status(200).json({ success: true });
+  } else if (req.method === "GET") {
+    const data = await getLastReviewedShas();
+    return res.status(200).json(data);
+  } else {
+    return res.status(405).end(); // Method not allowed
   }
 }
 
-function saveLastReviewedSha(owner, repo, prNumber, commitSha) {
-  const data = getLastReviewedShas();
-  const key = `${owner}/${repo}#${prNumber}`;
-  data[key] = commitSha;
-  fs.writeFileSync("../last_pr_sha.json", JSON.stringify(data, null, 2));
-}
+// ------------------------------ for production ---------------------------------
 
 function parseAddedLines(patch) {
   const lines = patch.split(/\r?\n/);
