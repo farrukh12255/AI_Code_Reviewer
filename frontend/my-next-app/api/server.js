@@ -26,7 +26,7 @@ function extractJSON(text) {
 // 🧩 Save/retrieve last reviewed PR info
 function getLastReviewedShas() {
   try {
-    return JSON.parse(fs.readFileSync(".last_pr_sha.json", "utf-8"));
+    return JSON.parse(fs.readFileSync("../last_pr_sha.json", "utf-8"));
   } catch {
     return {};
   }
@@ -36,7 +36,7 @@ function saveLastReviewedSha(owner, repo, prNumber, commitSha) {
   const data = getLastReviewedShas();
   const key = `${owner}/${repo}#${prNumber}`;
   data[key] = commitSha;
-  // fs.writeFileSync(".last_pr_sha.json", JSON.stringify(data, null, 2));
+  // fs.writeFileSync("../last_pr_sha.json", JSON.stringify(data, null, 2));
 
   const filePath = path.join("/tmp", "last_pr_sha.json");
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
