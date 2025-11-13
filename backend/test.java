@@ -1,25 +1,41 @@
-// Example of BAD Java code — do NOT copy this style!
-import java.util.*; import java.io.*; // unnecessary imports
+import java.util.*;
 
-class badCode{
-public static void main(String args[]){
-Scanner s=new Scanner(System.in);
-System.out.println("Enter number");
-int x = s.nextInt();
-if(x=5){ // <- assignment instead of comparison (doesn't compile!)
-System.out.println("x is 5");
-}else
-System.out.println("x isnt 5");
-for(int i=0;i<10;i++)
-System.out.println("Counting: "+i); System.out.println("Done!"); // confusing loop
-try{
-int[] arr=new int[2];
-arr[10]=5; // out of bounds
-}catch(Exception e){System.out.println("Something bad happened lol");}
-badCode b=new badCode();
-b.badMethod(); // infinite recursion ahead!
-}
-void badMethod(){
-badMethod(); // infinite recursion - will crash
-}
+public class badCodeExample {
+
+    static int x;
+
+    public static void main(String args[]) {
+        badCodeExample obj = new badCodeExample();
+        obj.doSomething(5);
+    }
+
+    public void doSomething(int y) {
+        if (y = 5) {
+            System.out.println("Y is 5");
+        }
+
+        for (int i = 0; i < 10; i++);
+        {
+            System.out.println("This runs once, not in a loop!");
+        }
+
+        List list = new ArrayList();
+        list.add("Hello");
+        list.add(123);
+        System.out.println(list.get(1));
+
+        String s = null;
+        System.out.println(s.length());
+
+        try {
+            int result = 10 / 0;
+        } catch (Exception e) {
+        }
+
+        badCodeExample();
+    }
+
+    public void badCodeExample() {
+        System.out.println("Not actually a constructor");
+    }
 }
