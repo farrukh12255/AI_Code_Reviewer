@@ -40,8 +40,8 @@ export default function Home() {
 
     setLoading(true);
     setResult(null);
-    const url = "http://localhost:4000/review"; // for dev
-    // const url = "https://backend-api-seven-pi.vercel.app/review"; // for prod
+    // const url = "http://localhost:4000/review"; // for dev
+    const url = "https://backend-api-seven-pi.vercel.app/review"; // for prod
 
     try {
       const response = await axios.post<ReviewResult>(url, formData, {
