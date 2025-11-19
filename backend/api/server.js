@@ -2,41 +2,40 @@ import express from "express";
 import { Octokit } from "@octokit/rest";
 import OpenAI from "openai";
 import dotenv from "dotenv";
-import fs from "fs";
 import cors from "cors";
+
+// ⬇️ NEW: Upstash Redis
+import { Redis } from "@upstash/redis";
 
 dotenv.config();
 
+// ⬇️ Redis from environment (UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN)
+const redis = Redis.fromEnv();
+
 const app = express();
-// Allow all origins (for dev only)
 app.use(cors());
-app.use(express.json({ limit: "50mb" })); // Increase request body size if needed
-app.set("timeout", 60000); // Set 1-minute timeout for long-running requests
+app.use(express.json({ limit: "50mb" }));
 
 // 🧩 Extract JSON safely from AI response
 function extractJSON(text) {
   const match = text.match(/\[\s*{[\s\S]*}\s*\]/);
   if (!match) throw new Error("No JSON found in AI response");
-
   return JSON.parse(match[0]);
 }
 
-// 🧩 Save/retrieve last reviewed PR info
-function getLastReviewedShas() {
-  try {
-    return JSON.parse(fs.readFileSync(".last_pr_sha.json", "utf-8"));
-  } catch {
-    return {};
-  }
+// 🧩 Redis: Load last reviewed SHA for a PR
+async function getLastReviewedSha(owner, repo, prNumber) {
+  const key = `pr-sha:${owner}/${repo}`;
+  return await redis.hget(key, String(prNumber));
 }
 
-function saveLastReviewedSha(owner, repo, prNumber, commitSha) {
-  const data = getLastReviewedShas();
-  const key = `${owner}/${repo}#${prNumber}`;
-  data[key] = commitSha;
-  fs.writeFileSync(".last_pr_sha.json", JSON.stringify(data, null, 2));
+// 🧩 Redis: Save last reviewed SHA
+async function saveLastReviewedSha(owner, repo, prNumber, sha) {
+  const key = `pr-sha:${owner}/${repo}`;
+  await redis.hset(key, { [String(prNumber)]: sha });
 }
 
+// Parse added lines from diff
 function parseAddedLines(patch) {
   const lines = patch.split(/\r?\n/);
   const result = [];
@@ -68,15 +67,15 @@ app.post("/review", async (req, res) => {
     return res.status(400).json({ error: "Missing required parameters" });
 
   const octokit = new Octokit({ auth: githubToken });
+
   const openai = new OpenAI({
     apiKey: googleKey,
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
   });
 
   try {
+    // Fetch PR
     let pr;
-
-    // 🧩 Fetch PR
     if (pull_number) {
       const { data } = await octokit.pulls.get({ owner, repo, pull_number });
       pr = data;
@@ -89,33 +88,25 @@ app.post("/review", async (req, res) => {
         direction: "desc",
         per_page: 1,
       });
-      if (!prs.length) throw new Error("No open pull requests found.");
+      if (!prs.length) throw new Error("No open PR found.");
       pr = prs[0];
     }
 
     const latestSha = pr.head.sha;
 
-    // 🧩 Load & check last reviewed SHA per PR
-    const lastShas = getLastReviewedShas();
-    const key = `${owner}/${repo}#${pr.number}`;
-    const lastReviewedSha = lastShas[key];
+    // ⬇️ NEW: Redis load
+    const lastReviewedSha = await getLastReviewedSha(owner, repo, pr.number);
 
+    // Skip if same SHA
     if (lastReviewedSha === latestSha) {
-      return res.json({ message: "No new commits to review — skipping." });
+      return res.json({ message: "No new commits — skipping review." });
     }
 
     let files = [];
     let commitsSummary = [];
 
-    // 🧩 If previously reviewed, compare commits from last reviewed SHA
+    // Compare commits
     if (lastReviewedSha) {
-      console.log(
-        `🔍 Comparing commits from ${lastReviewedSha.slice(
-          0,
-          7
-        )} → ${latestSha.slice(0, 7)}`
-      );
-
       const { data: compare } = await octokit.repos.compareCommits({
         owner,
         repo,
@@ -128,36 +119,27 @@ app.post("/review", async (req, res) => {
         sha: c.sha.slice(0, 7),
         message: c.commit.message.split("\n")[0],
       }));
-
-      console.log(`📜 Found ${compare.commits.length} new commits:`);
-      for (const c of commitsSummary) {
-        console.log(`   • ${c.sha} — ${c.message}`);
-      }
-
-      console.log(`📂 ${files.length} files changed since last review`);
     } else {
-      // 🆕 First-time review → review all files
+      // First review → list all PR files
       const { data: allFiles } = await octokit.pulls.listFiles({
         owner,
         repo,
         pull_number: pr.number,
       });
       files = allFiles;
-      console.log(`🆕 First review — reviewing all ${files.length} PR files`);
     }
 
-    // 🧩 No files changed
     if (!files.length) {
-      saveLastReviewedSha(owner, repo, pr.number, latestSha);
-      return res.json({ message: "✅ No changed files since last review." });
+      await saveLastReviewedSha(owner, repo, pr.number, latestSha);
+      return res.json({ message: "No changed files since last review." });
     }
 
     const allComments = [];
+    let Quality = [];
 
-    // 🧠 Loop through changed files
+    // Review changed files
     for (const file of files) {
       if (!file.patch) continue;
-      console.log(`🧠 Reviewing file: ${file.filename}`);
 
       const prompt = `
       You are a professional code reviewer analyzing a GitHub pull request diff.
@@ -206,34 +188,20 @@ app.post("/review", async (req, res) => {
         const aiComments = extractJSON(response.choices[0].message.content);
         const addedLines = parseAddedLines(file.patch);
 
+        let deduction = 0;
         for (const c of aiComments) {
           if (!c.comment || c.comment.length < 5) continue;
 
           let realLineEntry = addedLines[c.line - 1];
-          if (!realLineEntry) {
-            for (let offset = -3; offset <= 3; offset++) {
-              const nearby = addedLines[c.line - 1 + offset];
-              if (nearby) {
-                realLineEntry = nearby;
-                break;
-              }
-            }
-          }
-
           if (!realLineEntry) continue;
 
-          const contextStart = Math.max(0, c.line - 3);
-          const contextEnd = Math.min(addedLines.length, c.line + 2);
-          const context = addedLines
-            .slice(contextStart, contextEnd)
-            .map((l) => l.code)
-            .join("\n");
+          const severityWeights = { high: 10, medium: 5, low: 2 };
+          deduction += severityWeights[c.severity] || 5;
 
           const body = `\`\`\`js
-${context}
+${realLineEntry.code}
 \`\`\`
-
-💡 **AI Review:** ${c.comment.trim()}`;
+💡 **AI Review:** ${c.comment}`;
 
           allComments.push({
             path: file.filename,
@@ -242,49 +210,52 @@ ${context}
             body,
           });
         }
+
+        Quality.push({
+          file: file.filename,
+          quality: Math.max(100 - deduction, 0),
+        });
       } catch (err) {
-        console.warn(`⚠️ Skipped ${file.filename}: ${err.message}`);
+        console.warn(`Skipped ${file.filename}: ${err.message}`);
       }
     }
 
-    // 🧩 If no AI comments → simple message instead of approval
     if (!allComments.length) {
       await octokit.pulls.createReview({
         owner,
         repo,
         pull_number: pr.number,
-        body: "🤖 AI Review: No issues found — PR looks good!",
-        event: "APPROVE",
+        body: "🤖 AI Review: No issues found!",
+        event: "COMMENT",
       });
-      saveLastReviewedSha(owner, repo, pr.number, latestSha);
-      return res.json({ message: "✅ No issues found." });
+      await saveLastReviewedSha(owner, repo, pr.number, latestSha);
+      return res.json({ message: "No issues found." });
     }
-
-    console.log(`💬 Found ${allComments.length} review comments — posting...`);
 
     await octokit.pulls.createReview({
       owner,
       repo,
       pull_number: pr.number,
       commit_id: latestSha,
-      body: "🤖 AI Review completed — see inline comments below.",
+      body: "🤖 AI Review — see inline comments.",
       event: "COMMENT",
       comments: allComments,
     });
 
-    // 🧩 Save latest reviewed SHA
-    saveLastReviewedSha(owner, repo, pr.number, latestSha);
+    // ⬇️ NEW: Save SHA to Redis
+    await saveLastReviewedSha(owner, repo, pr.number, latestSha);
 
     res.json({
-      message: "✅ AI Review completed.",
+      message: "AI review completed.",
       comments: allComments.length,
       commitsReviewed: commitsSummary,
+      Quality,
     });
   } catch (err) {
-    console.error("❌ Error:", err.message);
+    console.error("Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`🚀 AI Reviewer running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
